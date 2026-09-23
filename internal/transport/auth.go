@@ -86,12 +86,18 @@ func fallbackArgs(ctx context.Context, h config.Host) []string {
 // fields. A fallback master expires after ten idle minutes and may be reused by
 // the dashboard's separate CLI handoffs.
 func (n Native) Authentication(ctx context.Context, h config.Host) (*exec.Cmd, string, error) {
+	timeout := n.ConnectTimeout
+	if timeout < 1 {
+		timeout = 10
+	}
+	baseArgs := []string{"-o", "ConnectTimeout=" + strconv.Itoa(timeout)}
 	path, e := configuredControlPath(ctx, h)
 	if e != nil {
 		return nil, "", fmt.Errorf("inspect SSH configuration: %w", e)
 	}
 	if path != "" && path != "none" {
-		return n.Authenticate(h), "Using the configured OpenSSH sharing policy.", nil
+		args := append(baseArgs, "--", h.SSH, "true")
+		return exec.CommandContext(ctx, "ssh", args...), "Using the configured OpenSSH sharing policy.", nil
 	}
 	record, ok := readAuth(h)
 	if !ok {
@@ -109,6 +115,6 @@ func (n Native) Authentication(ctx context.Context, h config.Host) (*exec.Cmd, s
 	if e = config.AtomicWrite(marker, b, 0600); e != nil {
 		return nil, "", e
 	}
-	args := []string{"-o", "ConnectTimeout=10", "-o", "ControlMaster=auto", "-o", "ControlPersist=600", "-o", "ControlPath=" + filepath.Join(record.Directory, "%C"), "--", h.SSH, "true"}
+	args := append(baseArgs, "-o", "ControlMaster=auto", "-o", "ControlPersist=600", "-o", "ControlPath="+filepath.Join(record.Directory, "%C"), "--", h.SSH, "true")
 	return exec.CommandContext(ctx, "ssh", args...), "App-owned SSH connection expires after ten idle minutes; no password is stored.", nil
 }

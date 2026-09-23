@@ -63,22 +63,14 @@ func addExecution(root *cobra.Command, o *options) {
 		if cmd.Flags().Changed("group") {
 			recipe.Group = group
 		}
-		build := func(ctx context.Context, v map[string]string) (ui.Review, error) {
-			r := recipe
-			r.Runner = v["runner"]
-			r.Group = v["group"]
-			p, e := s.RunPlan(ctx, snap, args[0], &r)
-			return ui.Review{Text: pretty(p), Data: p}, e
-		}
-		apply := func(ctx context.Context, _ map[string]string, r ui.Review) (string, error) {
-			record, e := s.Run(ctx, r.Data.(service.ExecutionPlan))
-			return pretty(record), e
-		}
+		spec := runFormSpec(s, snap, j, recipe, cmd.Flags().Changed("runner") || cmd.Flags().Changed("group"))
+		build := spec.Build
 		values := map[string]string{"runner": recipe.Runner, "group": recipe.Group}
 		if o.interactive {
-			_, e = ui.RunForm(cmd.Context(), ui.FormSpec{Title: "Run · " + j.Key(), Fields: []ui.Field{{Key: "runner", Label: "Execute via", Value: recipe.Runner, Options: []string{"direct", "pueue"}, Unavailable: map[string]string{"pueue": "checking target…"}}, {Key: "group", Label: "Existing Pueue group (empty=default)", Value: recipe.Group}}, Build: build, Apply: apply, Mouse: s.Config.Mouse, Load: func(ctx context.Context, _ map[string]string) []ui.FieldUpdate { return pueueFields(ctx, s, j.Host) }})
+			_, e = ui.RunForm(cmd.Context(), spec)
 			return e
 		}
+
 		r, e := build(cmd.Context(), values)
 		if e != nil {
 			return e

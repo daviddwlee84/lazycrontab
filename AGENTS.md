@@ -28,9 +28,19 @@ Writes require a reviewed plan, fresh revision check, original-content backup an
 read-back verification. Never automatically retry unknown remote writes. Native
 crontab has no atomic compare-and-swap against external editors.
 
-Dashboard handoffs release terminal ownership and invoke shared CLI workflows.
+Dashboard job/source forms and host selection mount shared workflow models;
+Playground is persistent and uses the same schedule editor as job forms.
+Only external editor/SSH/tool handoffs release terminal ownership.
 Background effects return messages; UI state belongs to the model. Check late
-results against target/generation, and let typing/paste own printable keys.
+results against target/generation and model ownership. Nested help completion
+must not close its containing workflow. Let typing/paste own printable keys.
+Render and mouse hit regions share layout; overlays consume mouse events.
+Execute owns the signal context; Bubble Tea uses WithoutSignalHandler.
+
+Host discovery is static OpenSSH alias inventory or typed dev JSON, not shared
+credential/config storage. Script presets and read-only checks never execute
+user scripts or install dependencies. Generated arguments are percent-encoded
+once for native cron. Preserve legacy recipes and stored commands on default Run.
 
 XDG preferences, metadata and state are separate on both OSes. Helper sidecars
 are bound to command digests; native cron/Pueue works without lazycrontab. Upgrade

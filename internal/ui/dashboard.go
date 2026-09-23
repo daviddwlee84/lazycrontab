@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/daviddwlee84/lazycrontab/internal/config"
+	"github.com/daviddwlee84/lazycrontab/internal/schedule"
 	"github.com/daviddwlee84/lazycrontab/internal/service"
 )
 
@@ -25,12 +26,16 @@ var defaultActions = []action{
 	{"timezone", "z", "Display timezone", false},
 	{"add", "n", "Add job", false}, {"edit", "e", "Edit job", true}, {"remove", "d", "Remove job", true}, {"toggle", "x", "Enable / disable", true}, {"run", "r", "Run now", true}, {"script", "E", "Edit script", true}, {"logs", "L", "Read logs", true},
 	{"refresh", "ctrl+r", "Refresh", false}, {"jobs", "1", "Jobs", false}, {"week", "2", "Week overview", false}, {"playground", "3", "Playground", false}, {"host-add", "a", "Add host", false}, {"source-add", "s", "Add source", false}, {"authenticate", "A", "Authenticate SSH", false}, {"queue", "Q", "Open lazypueue", false}, {"config", "C", "Edit config", false}, {"reload", "R", "Reload source", false},
+	{"guide", "f1", "Concepts and guides", false},
 }
 
 func Actions(keys map[string]string) ([]action, error) {
 	a := append([]action(nil), defaultActions...)
 	seen := map[string]string{}
 	reserved := map[string]bool{"q": true, "esc": true, "?": true, "/": true, ":": true, "tab": true, "shift+tab": true, "j": true, "k": true, "h": true, "l": true, "g": true, "G": true, "up": true, "down": true, "left": true, "right": true, "enter": true, "ctrl+c": true, "m": true}
+	for _, key := range []string{"alt+1", "alt+2", "alt+3"} {
+		reserved[key] = true
+	}
 	for i := range a {
 		if key, ok := keys[a[i].ID]; ok {
 			if key == "" || reserved[key] {
@@ -81,6 +86,11 @@ type logsMsg struct {
 	err          error
 }
 type queueAvailableMsg bool
+type workflowReady struct {
+	generation int
+	model      tea.Model
+	err        error
+}
 type viewContext struct {
 	key, filter      string
 	selected, scroll int
@@ -126,9 +136,19 @@ type dashboard struct {
 	dark                                                bool
 	timezoneEditing                                     bool
 	displayTimezone                                     string
+	factory                                             WorkflowFactory
+	child                                               tea.Model
+	childView                                           string
+	childCancel                                         context.CancelFunc
+	childGeneration                                     int
+	childPending                                        bool
+	playground                                          *ScheduleEditor
+	playgroundHost, playgroundSource                    string
+	mousePress                                          string
+	helpScroll                                          int
 }
 
-func Dashboard(ctx context.Context, s *service.Service, host, source, path string) error {
+func Dashboard(ctx context.Context, s *service.Service, host, source, path string, factories ...WorkflowFactory) error {
 	a, e := Actions(s.Config.Keys)
 	if e != nil {
 		return e
@@ -139,6 +159,9 @@ func Dashboard(ctx context.Context, s *service.Service, host, source, path strin
 	f.Prompt = "/ "
 	f.SetVirtualCursor(true)
 	m := &dashboard{ctx: child, cancel: cancel, service: s, configPath: path, actions: a, targets: s.Targets("all", "all"), snapshots: map[string]service.Snapshot{}, generations: map[string]int{}, pending: map[string]bool{}, sem: make(chan struct{}, s.Config.MaxParallel), width: 100, height: 30, focus: 1, filter: f, mouse: s.Config.Mouse, view: "jobs", weekDate: time.Now()}
+	if len(factories) > 0 {
+		m.factory = factories[0]
+	}
 	for i, t := range m.targets {
 		if t[0] == host && t[1] == source {
 			m.scope = i + 1
@@ -147,7 +170,7 @@ func Dashboard(ctx context.Context, s *service.Service, host, source, path strin
 	if host == "all" {
 		m.scope = 0
 	}
-	_, e = tea.NewProgram(m, tea.WithContext(child)).Run()
+	_, e = tea.NewProgram(m, tea.WithContext(child), tea.WithoutSignalHandler()).Run()
 	return e
 }
 func (m *dashboard) Init() tea.Cmd {
@@ -330,6 +353,14 @@ func (m *dashboard) act(id string) tea.Cmd {
 	if m.busy {
 		return nil
 	}
+	if id == "jobs" || id == "week" || id == "playground" {
+		if m.child != nil {
+			m.child.Update(tea.MouseReleaseMsg{X: -1, Y: -1})
+		}
+		if m.playground != nil {
+			m.playground.SetSize(m.width, max(1, m.height-2))
+		}
+	}
 	for _, a := range m.actions {
 		if a.ID == id && !m.available(a) {
 			m.status = "This action is unavailable for the selected source"
@@ -341,18 +372,33 @@ func (m *dashboard) act(id string) tea.Cmd {
 	m.filter.Blur()
 	switch id {
 	case "add":
+		if m.factory != nil {
+			return m.openWorkflow("add", "")
+		}
 		return m.handoff("add")
 	case "edit":
+		if m.factory != nil {
+			return m.openWorkflow("edit", "")
+		}
 		return m.handoff("edit", j.ID)
 	case "remove":
+		if m.factory != nil {
+			return m.openWorkflow("remove", "")
+		}
 		return m.handoff("remove", j.ID)
 	case "toggle":
+		if m.factory != nil {
+			return m.openWorkflow("toggle", "")
+		}
 		op := "enable"
 		if j.Enabled {
 			op = "disable"
 		}
 		return m.handoff(op, j.ID)
 	case "run":
+		if m.factory != nil {
+			return m.openWorkflow("run", "")
+		}
 		return m.handoff("run", j.ID, "--interactive")
 	case "script":
 		return m.handoff("script", "edit", j.ID)
@@ -365,16 +411,53 @@ func (m *dashboard) act(id string) tea.Cmd {
 		return m.refresh()
 	case "jobs":
 		m.view = "jobs"
-		m.agendaMode = false
+		m.mousePress = ""
 	case "week":
 		m.view = "week"
-		m.agendaMode = false
+		m.mousePress = ""
 		return m.buildWeek()
 	case "playground":
-		return m.handoff("playground")
+		m.view = "playground"
+		m.mousePress = ""
+		if m.playground == nil {
+			h, src := m.scopeTarget()
+			m.playgroundHost, m.playgroundSource = h, src
+			dialect := schedule.System
+			if source, err := m.service.Config.Source(h, src); err == nil {
+				if source.Dialect != "" {
+					dialect = schedule.Dialect(source.Dialect)
+				} else if source.Kind == "file" {
+					dialect = schedule.Supercronic
+				}
+			}
+			zone := m.snapshots[h+"/"+src].Timezone
+			if zone == "" {
+				source, _ := m.service.Config.Source(h, src)
+				host, _ := m.service.Config.Host(h)
+				zone = source.Timezone
+				if zone == "" {
+					zone = host.Timezone
+				}
+				if zone == "" && h == "local" {
+					zone = time.Local.String()
+				}
+			}
+			m.playground = NewScheduleEditor(m.ctx, ScheduleEditorOptions{Expression: "0 9 * * 1-5", Dialect: dialect, Timezone: zone, Locale: m.service.Config.Locale, Mouse: m.mouse, Theme: m.service.Config.Theme, Target: h + "/" + src})
+			m.playground.SetSize(m.width, max(1, m.height-2))
+			return m.playground.Init()
+		}
+		m.playground.Blur()
 	case "host-add":
+		if m.factory != nil {
+			return m.openWorkflow("host-add", "")
+		}
 		return m.handoff("hosts", "add")
+	case "guide":
+		return m.openWorkflow("guide", "")
 	case "source-add":
+		if m.factory != nil {
+			return m.openWorkflow("source-add", "")
+		}
 		return m.handoff("sources", "add")
 	case "authenticate":
 		return m.handoff("hosts", "authenticate")
@@ -462,6 +545,9 @@ func (m *dashboard) paletteActions() []action {
 	return out
 }
 func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := m.routeSurface(msg); handled {
+		return m, cmd
+	}
 	switch v := msg.(type) {
 	case queueAvailableMsg:
 		m.queueAvailable = bool(v)
@@ -505,6 +591,7 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if c, e := config.Load(m.configPath); e == nil {
 			previous := m.scopeKey()
+			previousMouse := m.service.Config.Mouse
 			m.service = service.New(c)
 			m.targets = m.service.Targets("all", "all")
 			m.scope = 0
@@ -513,7 +600,13 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.scope = i + 1
 				}
 			}
-			m.mouse = c.Mouse
+			if previousMouse != c.Mouse {
+				m.mouse = c.Mouse
+			}
+			for key := range m.generations {
+				m.generations[key]++
+				m.pending[key] = false
+			}
 			if a, e := Actions(c.Keys); e == nil {
 				m.actions = a
 			} else {
@@ -554,53 +647,8 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modalScroll = 0
 		}
 		return m, nil
-	case tea.MouseClickMsg:
-		if !m.mouse || m.help || m.modal != "" || m.palette {
-			return m, nil
-		}
-		mouse := v.Mouse()
-		if mouse.Y < 2 {
-			return m, nil
-		}
-		if m.view == "week" {
-			start := max(0, m.weekHour-max(1, m.height-10)+1)
-			if mouse.Y >= 5 && mouse.Y < min(m.height-5, 5+24-start) && mouse.X >= 7 && mouse.X < m.width {
-				m.weekHour = min(23, start+mouse.Y-5)
-				m.weekDay = max(0, min(6, (mouse.X-7)/8))
-			}
-			return m, nil
-		}
-		if m.width >= 100 && mouse.X < 22 {
-			m.focus = 0
-			if mouse.Y >= 4 {
-				m.changeScope(mouse.Y - 4)
-			}
-		} else if m.width >= 100 && mouse.X >= 26+(m.width-26)/2 {
-			m.focus = 2
-		} else if mouse.Y >= 4 {
-			m.focus = 1
-			m.selected = max(0, min(len(m.rows())-1, m.rowStart()+mouse.Y-4))
-			if j, ok := m.current(); ok {
-				m.selectedKey = j.Key()
-			}
-		}
-		return m, nil
-	case tea.MouseWheelMsg:
-		if !m.mouse {
-			return m, nil
-		}
-		delta := 1
-		if strings.Contains(v.String(), "up") {
-			delta = -1
-		}
-		if m.modal != "" {
-			m.modalScroll = max(0, m.modalScroll+delta)
-		} else if m.focus == 2 {
-			m.detailScroll = max(0, m.detailScroll+delta)
-		} else {
-			m.selectRow(delta)
-		}
-		return m, nil
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg:
+		return m, m.handleMouse(msg)
 	case tea.KeyPressMsg:
 		key := v.String()
 		if key == "ctrl+c" {
@@ -650,8 +698,19 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.help {
-			if key == "esc" || key == "?" || key == "q" {
-				m.help = false
+			switch key {
+			case "esc", "?", "q":
+				m.closeOverlay()
+			case "up", "k":
+				m.helpScroll = max(0, m.helpScroll-1)
+			case "down", "j":
+				m.helpScroll++
+			case "pgdown":
+				m.helpScroll += max(1, m.height-6)
+			case "pgup":
+				m.helpScroll = max(0, m.helpScroll-max(1, m.height-6))
+			case "f1":
+				return m, m.act("guide")
 			}
 			return m, nil
 		}
@@ -871,14 +930,15 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
-	return m, nil
+	return m, m.surfaceMessages(msg)
 }
-func (m *dashboard) rowStart() int { return max(0, m.selected-max(1, m.height-10)+1) }
+func (m *dashboard) rowStart() int { return max(0, m.selected-m.visibleRows()+1) }
 func (m *dashboard) scopeLines() []string {
+	theme := styles(m.isDark())
 	lines := []string{"Hosts / sources", ""}
 	label := "  All registered"
 	if m.scope == 0 {
-		label = "› All registered"
+		label = theme.Selected.Render("› All registered")
 	}
 	lines = append(lines, label)
 	for i, t := range m.targets {
@@ -889,27 +949,32 @@ func (m *dashboard) scopeLines() []string {
 		key := t[0] + "/" + t[1]
 		state := ""
 		if m.pending[key] {
-			state = " …"
+			state = theme.Warning.Render(" …")
 		} else if snap := m.snapshots[key]; snap.Error != "" {
-			state = " !"
+			state = theme.Error.Render(" !")
 		}
-		lines = append(lines, prefix+key+state)
+		line := prefix + key + state
+		if m.scope == i+1 {
+			line = theme.Selected.Render(prefix+key) + state
+		}
+		lines = append(lines, line)
 	}
 	return lines
 }
 func (m *dashboard) jobLines(width int) []string {
+	t := styles(m.isDark())
 	rows := m.rows()
 	lines := []string{"Jobs · " + fmt.Sprint(len(rows)), ""}
 	start := m.rowStart()
-	for i := start; i < min(len(rows), start+max(1, m.height-8)); i++ {
+	for i := start; i < min(len(rows), start+m.visibleRows()); i++ {
 		j := rows[i]
 		prefix := "  "
 		if i == m.selected {
 			prefix = "› "
 		}
-		state := "●"
+		state := t.Success.Render("●")
 		if !j.Enabled {
-			state = "○"
+			state = t.Muted.Render("○")
 		}
 		name := j.Name
 		if name == "" {
@@ -927,7 +992,11 @@ func (m *dashboard) jobLines(width int) []string {
 			next = j.Next[0].In(m.displayLocation()).Format("01-02 15:04")
 		}
 		name = clip(safe(name), max(8, min(20, width/3)))
-		lines = append(lines, clip(prefix+state+" "+name+" · "+next+" · "+safe(desc), width))
+		line := prefix + state + " " + name + " · " + t.Accent.Render(next) + " · " + t.Muted.Render(safe(desc))
+		if i == m.selected {
+			line = t.Selected.Render(pad(prefix+ansi.Strip(state)+" "+name+" · "+next+" · "+safe(desc), width))
+		}
+		lines = append(lines, clip(line, width))
 	}
 	if len(rows) == 0 {
 		lines = append(lines, "No matching jobs.", "n: create · /: search")
@@ -950,7 +1019,7 @@ func (m *dashboard) detailLines(width int) []string {
 	if !ok {
 		return []string{"Detail", "", "Select a job to inspect."}
 	}
-	lines := []string{"Detail · " + j.Host + "/" + j.Source, "", j.Name, j.Description, j.Schedule, "", "Command", j.Command, "", "Remark", j.Remark, "", "Timezone: " + j.Timezone, "ID: " + j.ID}
+	lines := []string{"Detail · " + j.Host + "/" + j.Source, "", j.Name, j.Description, j.Schedule, "", "COMMAND", j.Command, "", "REMARK", j.Remark, "", "Timezone: " + j.Timezone, "ID: " + j.ID}
 	for _, t := range j.Next {
 		lines = append(lines, "Next: "+t.In(m.displayLocation()).Format("2006-01-02 15:04 -07:00"))
 	}
@@ -966,7 +1035,21 @@ func (m *dashboard) detailLines(width int) []string {
 	}
 	wrapped := []string{}
 	for _, line := range lines {
-		wrapped = append(wrapped, strings.Split(ansi.Hardwrap(safe(line), max(1, width), true), "\n")...)
+		parts := strings.Split(ansi.Hardwrap(safe(line), max(1, width), true), "\n")
+		t := styles(m.isDark())
+		for _, part := range parts {
+			switch {
+			case line == j.Schedule:
+				part = t.Schedule.Render(part)
+			case line == j.Name:
+				part = t.Title.Render(part)
+			case line == "COMMAND" || line == "REMARK":
+				part = t.Muted.Bold(true).Render(part)
+			case strings.HasPrefix(line, "!") || strings.HasPrefix(line, "STALE:"):
+				part = t.Warning.Render(part)
+			}
+			wrapped = append(wrapped, part)
+		}
 	}
 	start := min(m.detailScroll, max(0, len(wrapped)-1))
 	return wrapped[start:]
@@ -986,144 +1069,149 @@ func pane(lines []string, width, height int, focused bool) string {
 	return strings.Join(out, "\n")
 }
 func (m *dashboard) weekLines() []string {
+	t := styles(m.isDark())
 	if m.agendaMode {
-		lines := []string{"Agenda · exact times and UTC offsets", "PgUp/PgDn pages · Enter inspect job · Esc grid"}
-		if m.agendaPending {
-			lines = append(lines, "Loading…")
-		}
-		start := max(0, m.agendaSelected-max(1, m.height-8)+1)
-		for i := start; i < min(len(m.agenda), start+max(1, m.height-8)); i++ {
+		lines := []string{t.Title.Render("Agenda · exact times and UTC offsets"), t.Muted.Render("PgUp/PgDn pages · Enter inspect job · Esc grid")}
+		start := m.agendaStart()
+		for i := start; i < min(len(m.agenda), start+max(1, m.layout().body.h-2)); i++ {
 			a := m.agenda[i]
-			p := "  "
-			if i == m.agendaSelected {
-				p = "› "
-			}
-			lines = append(lines, p+a.Time.Format("Mon 15:04:05 -07:00")+" "+a.Host+"/"+a.Source+" "+a.Name)
+			line := "  " + a.Time.Format("Mon 15:04:05 -07:00") + " " + a.Host + "/" + a.Source + " " + a.Name
 			if a.Queued {
-				lines[len(lines)-1] += " [enqueue]"
+				line += " [enqueue]"
 			}
+			if i == m.agendaSelected {
+				line = t.Selected.Render(pad("› "+strings.TrimPrefix(line, "  "), m.width))
+			}
+			lines = append(lines, line)
 		}
-		if len(m.agenda) == 0 && !m.agendaPending {
+		if m.agendaPending {
+			lines = append(lines, t.Warning.Render("Loading…"))
+		} else if len(m.agenda) == 0 {
 			lines = append(lines, "No triggers in this hour (including missing DST hours).")
 		}
 		return lines
 	}
-	lines := []string{"Forecast · week of " + m.week.Start.Format("2006-01-02") + " · " + m.week.Timezone, "[ / ] week · arrows select · Enter exact agenda", "       Mon     Tue     Wed     Thu     Fri     Sat     Sun"}
+	title := "Forecast · week of " + m.week.Start.Format("2006-01-02") + " · " + m.week.Timezone
 	if m.weekPending {
-		lines[0] += " · calculating…"
+		title += " · calculating…"
 	}
-	start := max(0, m.weekHour-max(1, m.height-10)+1)
-	for h := start; h < min(24, start+max(1, m.height-10)); h++ {
+	days := "       Mon     Tue     Wed     Thu     Fri     Sat     Sun"
+	if m.width < 70 {
+		days = m.week.Start.AddDate(0, 0, m.weekDay).Format("Monday 02 Jan") + " · ←/→ change day"
+	}
+	lines := []string{t.Title.Render(title), t.Muted.Render("Configured triggers · Enter exact agenda"), t.Accent.Render(days)}
+	start := m.weekStart()
+	for h := start; h < min(24, start+max(1, m.layout().body.h-3)); h++ {
 		line := fmt.Sprintf("%02d:00 ", h)
-		for d := range 7 {
+		for d := 0; d < 7; d++ {
+			if m.width < 70 && d != m.weekDay {
+				continue
+			}
 			cell := m.week.Cells[d][h]
 			label := fmt.Sprint(cell.Count)
 			if cell.Truncated {
 				label += "+"
 			}
+			style := t.Muted
+			if cell.Count > 0 {
+				style = t.Accent
+			}
+			if cell.Count >= 5 {
+				style = t.Schedule
+			}
+			if cell.Truncated {
+				style = t.Warning
+			}
 			if h == m.weekHour && d == m.weekDay {
 				label = "[" + label + "]"
+				style = t.Selected
 			}
-			line += fmt.Sprintf("%7s ", label)
+			line += style.Render(fmt.Sprintf("%7s ", label))
 		}
 		lines = append(lines, line)
-	}
-	lines = append(lines, "Configured trigger times; Pueue execution may wait in its queue.")
-	if len(m.week.Warnings) > 0 {
-		lines = append(lines, "! "+strings.Join(m.week.Warnings, " · "))
 	}
 	return lines
 }
 func (m *dashboard) View() tea.View {
-	header := "lazycrontab  ·  Jobs [1]  Week [2]  Playground [3]"
-	if m.timezoneEditing {
-		header = "Display timezone · Enter apply / Esc cancel: " + m.filter.View()
-	} else if m.filtering {
-		header = m.filter.View()
+	t := styles(m.isDark())
+	header := m.header()
+	contextLine := m.scopeKey() + " · display " + m.displayLocation().String()
+	if m.view == "playground" && m.playground != nil && m.playground.Editing() {
+		contextLine = "Editing cron · Alt+1/2/3 switch views · Esc leaves input"
+	}
+	if m.filtering || m.timezoneEditing {
+		contextLine = m.filter.View()
 	} else if m.filter.Value() != "" && !m.palette {
-		header += "  / " + safe(m.filter.Value())
+		contextLine += " · / " + safe(m.filter.Value())
 	}
-	height := max(1, m.height-5)
+	if m.childPending {
+		contextLine += " · opening draft…"
+	} else if m.child != nil {
+		contextLine += " · open draft"
+	}
 	var body string
-	switch {
-	case m.modal != "":
-		lines := strings.Split(safe(m.modal), "\n")
-		start := min(m.modalScroll, max(0, len(lines)-1))
-		body = pane(append([]string{"Esc return · ↑↓ scroll", ""}, lines[start:]...), max(1, m.width), height, false)
-	case m.help:
-		lines := []string{"Contextual actions · Esc return", "↑↓ / j k select · Tab / Shift+Tab focus · h/l panes · gg/G jump", "/ search · : actions · q quit · m mouse capture"}
-		for _, a := range m.actions {
-			if m.available(a) {
-				lines = append(lines, fmt.Sprintf("%-10s %s", a.Key, a.Label))
+	if m.childShowing() {
+		body = m.child.View().Content
+	} else if m.view == "playground" && m.playground != nil && !m.help && !m.palette && m.modal == "" {
+		body = m.playground.View().Content
+	} else {
+		height := m.layout().body.h
+		switch {
+		case m.modal != "":
+			lines := strings.Split(ansi.Hardwrap(safe(m.modal), max(1, m.width), true), "\n")
+			start := min(m.modalScroll, max(0, len(lines)-1))
+			body = fitLines(strings.Join(lines[start:], "\n"), m.width, height)
+		case m.help:
+			lines := m.helpLines()
+			start := min(m.helpScroll, max(0, len(lines)-1))
+			body = fitLines(strings.Join(lines[start:], "\n"), m.width, height)
+		case m.palette:
+			lines := []string{t.Title.Render("Actions · Enter choose"), m.filter.View()}
+			items := m.paletteActions()
+			start := max(0, m.paletteRow-height+3)
+			for i := start; i < min(len(items), start+max(1, height-2)); i++ {
+				line := "  " + items[i].Label + " [" + items[i].Key + "]"
+				if i == m.paletteRow {
+					line = t.Selected.Render(pad("› "+items[i].Label+" ["+items[i].Key+"]", m.width))
+				}
+				lines = append(lines, line)
+			}
+			if len(items) == 0 {
+				lines = append(lines, "No matching actions.")
+			}
+			body = fitLines(strings.Join(lines, "\n"), m.width, height)
+		case m.view == "week":
+			body = fitLines(strings.Join(m.weekLines(), "\n"), m.width, height)
+		default:
+			body = m.jobBody()
+		}
+		status := m.status
+		if m.prefixG {
+			status = "g… (g first row, Esc cancel)"
+		}
+		if m.busy {
+			status = "External interaction owns the terminal"
+		}
+		if m.focus == 0 && m.scope > 0 && m.scope <= len(m.targets) {
+			snap := m.snapshots[m.targets[m.scope-1][0]+"/"+m.targets[m.scope-1][1]]
+			if snap.Error != "" {
+				status = "! " + snap.Error
 			}
 		}
-		body = pane(lines, m.width, height, false)
-	case m.palette:
-		lines := []string{"Actions · Enter choose · Esc cancel", m.filter.View()}
-		items := m.paletteActions()
-		start := max(0, m.paletteRow-height+4)
-		for i := start; i < min(len(items), start+height-2); i++ {
-			p := "  "
-			if i == m.paletteRow {
-				p = "› "
+		var buttons []string
+		x := 0
+		for _, b := range m.footerButtons() {
+			w := ansi.StringWidth(b[1]) + 4
+			if x+w > m.width {
+				break
 			}
-			lines = append(lines, p+items[i].Label+" ["+items[i].Key+"]")
+			buttons = append(buttons, t.Accent.Render("[ "+b[1]+" ]"))
+			x += w + 1
 		}
-		body = pane(lines, m.width, height, false)
-	case m.view == "week":
-		body = pane(m.weekLines(), m.width, height, false)
-	case m.width >= 100:
-		left := 22
-		middle := (m.width - left - 4) / 2
-		right := m.width - left - middle - 4
-		body = lipgloss.JoinHorizontal(lipgloss.Top, pane(m.scopeLines(), left, height, m.focus == 0), " │ ", pane(m.jobLines(middle), middle, height, m.focus == 1), "│", pane(m.detailLines(right), right, height, m.focus == 2))
-	default:
-		lines := m.jobLines(m.width)
-		if m.focus == 0 {
-			lines = m.scopeLines()
-		}
-		if m.focus == 2 {
-			lines = m.detailLines(m.width)
-		}
-		body = pane(lines, m.width, height, true)
+		hint := "Tab focus · / search · : actions · ? help · q quit · m mouse"
+		body += "\n" + t.Muted.Render(clip(safe(status), m.width)) + "\n" + strings.Join(buttons, " ") + "\n" + t.Muted.Render(clip(hint, m.width))
 	}
-	footer := []string{}
-	for _, a := range m.actions {
-		if m.available(a) && (a.ID == "add" || a.ID == "edit" || a.ID == "run" || a.ID == "logs") {
-			footer = append(footer, a.Key+" "+a.Label)
-		}
-	}
-	footer = append(footer, "/ search", ": actions", "? help", "q quit")
-	status := m.status
-	if m.prefixG {
-		status = "g… (g first row, Esc cancel)"
-	}
-	if m.busy {
-		status = "External interaction owns the terminal"
-	}
-	if m.focus == 0 && m.scope > 0 {
-		snap := m.snapshots[m.targets[m.scope-1][0]+"/"+m.targets[m.scope-1][1]]
-		if snap.Error != "" {
-			status = "! " + snap.Error
-		}
-	}
-	content := clip(header, m.width) + "\n\n" + body + "\n" + clip(safe(status), m.width) + "\n" + clip(strings.Join(footer, " · "), m.width)
-	if os.Getenv("NO_COLOR") == "" {
-		dark := m.dark
-		if m.service.Config.Theme == "dark" {
-			dark = true
-		}
-		if m.service.Config.Theme == "light" {
-			dark = false
-		}
-		color := "#0969da"
-		if dark {
-			color = "#7dd3fc"
-		}
-		header = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(color)).Render(clip(header, m.width))
-		content = header + "\n\n" + body + "\n" + clip(safe(status), m.width) + "\n" + clip(strings.Join(footer, " · "), m.width)
-	}
-	v := tea.NewView(content)
+	v := tea.NewView(fitLines(header+"\n"+t.Muted.Render(clip(contextLine, m.width))+"\n"+body, m.width, m.height))
 	v.AltScreen = true
 	if m.mouse {
 		v.MouseMode = tea.MouseModeCellMotion

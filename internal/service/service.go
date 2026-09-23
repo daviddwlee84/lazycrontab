@@ -280,6 +280,9 @@ func Diff(before, after string) string {
 	return out.String()
 }
 func (s *Service) Plan(ctx context.Context, snap Snapshot, id string, replacement *document.Job, operation string) (Plan, error) {
+	if operation == "add" && id != "" {
+		return Plan{}, fmt.Errorf("adding a job cannot replace an existing job ID")
+	}
 	if snap.Document == nil {
 		return Plan{}, fmt.Errorf("no source snapshot")
 	}

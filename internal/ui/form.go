@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -16,6 +17,8 @@ var ErrCancelled = errors.New("cancelled")
 
 type Field struct {
 	Key, Label, Value string
+	Kind, Hint        string
+	Pick              func(context.Context, map[string]string) ([]PickOption, error)
 	Options           []string
 	Advanced          bool
 	Unavailable       map[string]string
@@ -25,19 +28,29 @@ type FieldUpdate struct {
 	Key         string
 	Options     []string
 	Unavailable map[string]string
+	Value       *string
+	Hint        string
+	Schedule    *ScheduleEditorOptions
+}
+type PickOption struct {
+	Label, Value string
+	Navigate     bool
 }
 type Review struct {
 	Text string
 	Data any
 }
 type FormSpec struct {
-	Title  string
-	Fields []Field
-	Live   func(map[string]string) string
-	Build  func(context.Context, map[string]string) (Review, error)
-	Apply  func(context.Context, map[string]string, Review) (string, error)
-	Mouse  bool
-	Load   func(context.Context, map[string]string) []FieldUpdate
+	Title           string
+	Theme           string
+	Fields          []Field
+	Live            func(map[string]string) string
+	Build           func(context.Context, map[string]string) (Review, error)
+	Apply           func(context.Context, map[string]string, Review) (string, error)
+	Mouse           bool
+	Load            func(context.Context, map[string]string) []FieldUpdate
+	LoadKeys        []string
+	ScheduleContext func(map[string]string) ScheduleEditorOptions
 }
 type FormResult struct {
 	Values    map[string]string
@@ -48,14 +61,20 @@ type FormResult struct {
 type formBuilt struct {
 	review Review
 	err    error
+	owner  *Form
 }
 type formApplied struct {
 	message string
 	err     error
+	owner   *Form
 }
 type formLoaded struct {
 	generation int
 	fields     []FieldUpdate
+}
+type formLoadTick struct {
+	owner      *Form
+	generation int
 }
 type Form struct {
 	spec                         FormSpec
@@ -71,11 +90,59 @@ type Form struct {
 	result                       FormResult
 	mousePress                   string
 	loadGeneration               int
+	loadCancel                   context.CancelFunc
+	loadValues                   map[string]string
+	embedded, dark               bool
+	live                         string
+	liveGeneration               int
+	schedule                     *ScheduleEditor
+	scheduleIndex                int
+	scheduleContext              *ScheduleEditorOptions
+	picker                       *formPicker
+	help                         *HelpBrowser
+	initialReview                bool
+	applyDispatched              bool
+	finished                     bool
+	cancelRequested              bool
 }
+type formLive struct {
+	generation int
+	text       string
+}
+
+var formSequence atomic.Int64
+
+func (f *Form) SetEmbedded(value bool) { f.embedded = value }
+func (f *Form) SetMouse(value bool) {
+	f.spec.Mouse = value
+	if f.schedule != nil {
+		f.schedule.SetMouse(value)
+	}
+	if f.help != nil {
+		f.help.SetMouse(value)
+	}
+}
+func (f *Form) finish() tea.Cmd {
+	if f.finished {
+		return nil
+	}
+	f.finished = true
+	f.cancel()
+	if f.embedded {
+		result := WorkflowDoneMsg{Err: f.err, Message: f.message, Changed: f.result.Submitted || f.applyDispatched, Owner: f}
+		if f.stage == "applying" {
+			result.Changed = true
+			result.Message = "Stopped waiting; a dispatched operation may already have taken effect."
+		}
+		return func() tea.Msg { return result }
+	}
+	return tea.Quit
+}
+func (f *Form) Result() (FormResult, error) { return f.result, f.err }
 
 func NewForm(ctx context.Context, spec FormSpec) *Form {
 	child, cancel := context.WithCancel(ctx)
-	f := &Form{spec: spec, ctx: child, cancel: cancel, width: 80, height: 24, stage: "edit"}
+	f := &Form{spec: spec, ctx: child, cancel: cancel, width: 80, height: 24, stage: "edit", dark: spec.Theme != "light"}
 	for _, field := range spec.Fields {
 		input := textinput.New()
 		input.SetValue(field.Value)
@@ -90,16 +157,46 @@ func NewForm(ctx context.Context, spec FormSpec) *Form {
 	}
 	return f
 }
-func (f *Form) Init() tea.Cmd { return tea.Batch(textinput.Blink, f.load()) }
+func (f *Form) Init() tea.Cmd {
+	if f.initialReview {
+		return tea.Batch(tea.RequestBackgroundColor, f.reviewCmd())
+	}
+	return tea.Batch(textinput.Blink, tea.RequestBackgroundColor, f.load(), f.updateLive())
+}
+func NewReviewForm(ctx context.Context, spec FormSpec) *Form {
+	f := NewForm(ctx, spec)
+	f.initialReview = true
+	return f
+}
 func (f *Form) load() tea.Cmd {
 	if f.spec.Load == nil {
 		return nil
 	}
-	f.loadGeneration++
+	f.loadGeneration = int(formSequence.Add(1))
+	return f.startLoad()
+}
+func (f *Form) startLoad() tea.Cmd {
+	if f.loadCancel != nil {
+		f.loadCancel()
+	}
+	ctx, cancel := context.WithCancel(f.ctx)
+	f.loadCancel = cancel
 	g := f.loadGeneration
 	v := f.Values()
-	load, ctx := f.spec.Load, f.ctx
+	f.loadValues = v
+	load := f.spec.Load
 	return func() tea.Msg { return formLoaded{g, load(ctx, v)} }
+}
+func (f *Form) queueLoad() tea.Cmd {
+	if f.spec.Load == nil {
+		return nil
+	}
+	if f.loadCancel != nil {
+		f.loadCancel()
+	}
+	f.loadGeneration = int(formSequence.Add(1))
+	g := f.loadGeneration
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return formLoadTick{f, g} })
 }
 func (f *Form) Values() map[string]string {
 	v := map[string]string{}
@@ -138,39 +235,143 @@ func (f *Form) reviewCmd() tea.Cmd {
 	f.err = nil
 	f.stage = "building"
 	values := f.Values()
-	return func() tea.Msg { r, e := f.spec.Build(f.ctx, values); return formBuilt{r, e} }
+	return func() tea.Msg { r, e := f.spec.Build(f.ctx, values); return formBuilt{r, e, f} }
 }
 func (f *Form) applyCmd() tea.Cmd {
 	f.mousePress = ""
 	f.stage = "applying"
+	f.applyDispatched = true
 	values, review := f.Values(), f.review
-	return func() tea.Msg { message, err := f.spec.Apply(f.ctx, values, review); return formApplied{message, err} }
+	return func() tea.Msg {
+		message, err := f.spec.Apply(f.ctx, values, review)
+		return formApplied{message, err, f}
+	}
+}
+func (f *Form) updateLive() tea.Cmd {
+	if f.spec.Live == nil {
+		return nil
+	}
+	f.liveGeneration = int(formSequence.Add(1))
+	g := f.liveGeneration
+	values := f.Values()
+	live := f.spec.Live
+	return func() tea.Msg { return formLive{g, live(values)} }
+}
+func (f *Form) changed(key string) tea.Cmd {
+	f.mousePress = ""
+	f.err = nil
+	cmds := []tea.Cmd{f.updateLive()}
+	for _, k := range f.spec.LoadKeys {
+		if k == key {
+			cmds = append(cmds, f.queueLoad())
+			break
+		}
+	}
+	if key == "host" && len(f.spec.LoadKeys) == 0 {
+		cmds = append(cmds, f.queueLoad())
+	}
+	if key == "host" || key == "source" {
+		f.scheduleContext = nil
+	}
+	list := f.visible()
+	found := false
+	for _, i := range list {
+		if i == f.focus {
+			found = true
+		}
+	}
+	if !found && len(list) > 0 {
+		f.focusField(list[0])
+	}
+	return tea.Batch(cmds...)
+}
+func (f *Form) focusField(index int) {
+	if index < 0 || index >= len(f.inputs) {
+		return
+	}
+	if len(f.inputs) > 0 {
+		f.inputs[f.focus].Blur()
+	}
+	f.focus = index
+	f.inputs[index].Focus()
+	f.mousePress = ""
+}
+func (f *Form) chooseOption(delta int) tea.Cmd {
+	if len(f.inputs) == 0 {
+		return nil
+	}
+	field := f.spec.Fields[f.focus]
+	options := field.Options
+	if len(options) == 0 {
+		return nil
+	}
+	pos := 0
+	for i, v := range options {
+		if v == f.inputs[f.focus].Value() {
+			pos = i
+		}
+	}
+	pos = (pos + delta + len(options)) % len(options)
+	if reason := field.Unavailable[options[pos]]; reason != "" {
+		f.err = fmt.Errorf("%s", reason)
+		return nil
+	}
+	f.inputs[f.focus].SetValue(options[pos])
+	return f.changed(field.Key)
+}
+func (f *Form) openSchedule() tea.Cmd {
+	options := ScheduleEditorOptions{Timezone: "Local", Locale: "en", Mouse: f.spec.Mouse}
+	if f.spec.ScheduleContext != nil {
+		options = f.spec.ScheduleContext(f.Values())
+	}
+	if f.scheduleContext != nil {
+		options = *f.scheduleContext
+	}
+	options.Expression = f.inputs[f.focus].Value()
+	options.Mouse = f.spec.Mouse
+	f.scheduleIndex = f.focus
+	f.schedule = NewScheduleEditor(f.ctx, options)
+	f.schedule.SetSize(f.width, f.height)
+	return f.schedule.Init()
+}
+func (f *Form) closeSchedule() tea.Cmd {
+	i := f.scheduleIndex
+	f.inputs[i].SetValue(f.schedule.Expression())
+	f.schedule = nil
+	return f.changed(f.spec.Fields[i].Key)
 }
 func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
-	case formLoaded:
-		if m.generation != f.loadGeneration {
-			return f, nil
+	case formLoadTick:
+		if m.owner == f && m.generation == f.loadGeneration && f.stage == "edit" {
+			return f, f.startLoad()
 		}
-		for _, u := range m.fields {
-			for i := range f.spec.Fields {
-				if f.spec.Fields[i].Key == u.Key {
-					f.spec.Fields[i].Options = u.Options
-					f.spec.Fields[i].Unavailable = u.Unavailable
-				}
-			}
+		return f, nil
+	case tea.BackgroundColorMsg:
+		if f.spec.Theme == "" || f.spec.Theme == "auto" {
+			f.dark = m.IsDark()
 		}
 		return f, nil
 	case tea.WindowSizeMsg:
-		f.width = max(20, m.Width)
-		f.height = max(6, m.Height)
+		if f.picker != nil {
+			f.picker.press = ""
+			f.picker.query.SetWidth(max(1, m.Width-6))
+		}
+		f.width = max(1, m.Width)
+		f.height = max(1, m.Height)
 		f.mousePress = ""
 		for i := range f.inputs {
-			f.inputs[i].SetWidth(max(8, f.width-8))
+			f.inputs[i].SetWidth(max(1, f.width-8))
+		}
+		if f.schedule != nil {
+			f.schedule.SetSize(f.width, f.height)
+		}
+		if f.help != nil {
+			f.help.Update(m)
 		}
 		return f, nil
 	case formBuilt:
-		if f.stage != "building" {
+		if m.owner != f || f.stage != "building" {
 			return f, nil
 		}
 		if m.err != nil {
@@ -183,59 +384,136 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return f, nil
 	case formApplied:
-		if f.stage != "applying" {
+		if m.owner != f || f.stage != "applying" {
 			return f, nil
 		}
 		f.message = m.message
 		f.err = m.err
 		f.stage = "result"
+		f.scroll = 0
 		f.result = FormResult{Values: f.Values(), Review: f.review, Message: m.message, Submitted: m.err == nil}
 		return f, nil
+	case formLive:
+		if m.generation == f.liveGeneration {
+			f.live = m.text
+		}
+		return f, nil
+	case formLoaded:
+		if m.generation != f.loadGeneration || f.stage != "edit" {
+			return f, nil
+		}
+		var updates []tea.Cmd
+		for _, u := range m.fields {
+			for i := range f.spec.Fields {
+				if f.spec.Fields[i].Key == u.Key {
+					if u.Options != nil {
+						f.spec.Fields[i].Options = u.Options
+					}
+					f.spec.Fields[i].Unavailable = u.Unavailable
+					if u.Value != nil && f.inputs[i].Value() == f.loadValues[u.Key] {
+						f.inputs[i].SetValue(*u.Value)
+					}
+					f.spec.Fields[i].Hint = u.Hint
+					if u.Schedule != nil {
+						f.scheduleContext = u.Schedule
+						if f.schedule != nil {
+							updates = append(updates, f.schedule.SetContext(u.Schedule.Dialect, u.Schedule.Timezone, u.Schedule.Locale))
+						}
+					}
+				}
+			}
+		}
+		return f, tea.Batch(append(updates, f.updateLive())...)
+	case formPickLoaded:
+		return f, f.acceptPick(m)
+	}
+	if f.help != nil {
+		if closed, ok := msg.(helpClosedMsg); ok && closed.owner == f.help {
+			f.help = nil
+			return f, nil
+		}
+		_, cmd := f.help.Update(msg)
+		return f, cmd
+	}
+	if f.picker != nil {
+		return f, f.updatePicker(msg)
+	}
+	if f.schedule != nil {
+		switch m := msg.(type) {
+		case ScheduleUseMsg:
+			return f, f.closeSchedule()
+		case tea.KeyPressMsg:
+			if m.String() == "esc" && !f.schedule.Editing() {
+				return f, f.closeSchedule()
+			}
+			if m.String() == "ctrl+c" {
+				return f, f.closeSchedule()
+			}
+		}
+		_, cmd := f.schedule.Update(msg)
+		return f, cmd
+	}
+	switch m := msg.(type) {
 	case tea.MouseClickMsg:
 		if !f.spec.Mouse {
 			return f, nil
 		}
 		mouse := m.Mouse()
+		id := hitAt(f.hits(), mouse.X, mouse.Y)
 		f.mousePress = ""
-		if mouse.Y == f.height-2 && mouse.X >= 0 && mouse.X < min(14, f.width) {
-			f.mousePress = f.stage
-		}
-		if f.stage == "edit" {
-			list, start, rows := f.fieldWindow()
-			row := (mouse.Y - 2) / 2
-			if mouse.Y >= 2 && row >= 0 && row < rows && start+row < len(list) {
-				f.inputs[f.focus].Blur()
-				f.focus = list[start+row]
-				f.inputs[f.focus].Focus()
-			}
+		if strings.HasPrefix(id, "field:") {
+			var index int
+			fmt.Sscanf(id, "field:%d", &index)
+			f.focusField(index)
+		} else {
+			f.mousePress = id
 		}
 		return f, nil
 	case tea.MouseReleaseMsg:
-		mouse := m.Mouse()
-		hit := f.mousePress != "" && f.mousePress == f.stage && mouse.Y == f.height-2 && mouse.X >= 0 && mouse.X < min(14, f.width)
-		f.mousePress = ""
-		if hit {
-			if f.stage == "edit" {
-				return f, f.reviewCmd()
-			}
-			if f.stage == "review" {
-				return f, f.applyCmd()
-			}
+		if !f.spec.Mouse {
+			return f, nil
 		}
+		mouse := m.Mouse()
+		id := hitAt(f.hits(), mouse.X, mouse.Y)
+		pressed := f.mousePress
+		f.mousePress = ""
+		if id != "" && id == pressed {
+			return f, f.activate(id)
+		}
+		return f, nil
+	case tea.MouseWheelMsg:
+		if !f.spec.Mouse {
+			return f, nil
+		}
+		delta := 1
+		if strings.Contains(m.String(), "up") {
+			delta = -1
+		}
+		if f.stage == "edit" && len(f.inputs) > 0 {
+			f.move(delta)
+		} else {
+			f.scroll = max(0, f.scroll+delta*3)
+		}
+		f.mousePress = ""
 		return f, nil
 	case tea.KeyPressMsg:
 		key := m.String()
+		f.mousePress = ""
 		if m.IsRepeat && (key == "ctrl+s" || key == "y") {
 			return f, nil
 		}
 		if key == "ctrl+c" {
-			f.cancel()
+			if f.stage == "applying" {
+				f.cancelRequested = true
+				f.cancel()
+				return f, nil
+			}
 			f.err = ErrCancelled
-			return f, tea.Quit
+			return f, f.finish()
 		}
 		if f.stage == "result" {
 			if key == "enter" || key == "q" || key == "esc" {
-				return f, tea.Quit
+				return f, f.finish()
 			}
 			if key == "down" || key == "j" {
 				f.scroll++
@@ -247,9 +525,13 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if f.stage == "building" || f.stage == "applying" {
 			if key == "esc" {
-				f.cancel()
+				if f.stage == "applying" {
+					f.cancelRequested = true
+					f.cancel()
+					return f, nil
+				}
 				f.err = ErrCancelled
-				return f, tea.Quit
+				return f, f.finish()
 			}
 			return f, nil
 		}
@@ -258,12 +540,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+s", "y":
 				return f, f.applyCmd()
 			case "esc", "n":
-				if len(f.inputs) == 0 {
-					f.err = ErrCancelled
-					return f, tea.Quit
-				}
-				f.stage = "edit"
-				f.scroll = 0
+				return f, f.activate("back")
 			case "down", "j":
 				f.scroll++
 			case "up", "k":
@@ -278,57 +555,131 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc":
 			f.err = ErrCancelled
-			return f, tea.Quit
+			return f, f.finish()
 		case "ctrl+s":
 			return f, f.reviewCmd()
 		case "ctrl+o":
-			f.advanced = !f.advanced
-			if !f.advanced && f.spec.Fields[f.focus].Advanced {
-				f.inputs[f.focus].Blur()
-				f.focus = 0
-				f.inputs[0].Focus()
+			return f, f.activate("advanced")
+		case "ctrl+p", "f4":
+			return f, f.startPicker()
+		case "f1":
+			topic := "paths-and-scripts"
+			if len(f.inputs) > 0 {
+				switch f.spec.Fields[f.focus].Key {
+				case "host", "source":
+					topic = "ssh"
+				case "schedule":
+					topic = "cron-fields"
+				case "environment", "runner":
+					topic = "execution-environment"
+				case "project":
+					topic = "uv"
+				}
 			}
+			f.help = NewHelpBrowser(topic, f.spec.Mouse)
+			f.help.SetEmbedded(true)
+			f.help.nested = true
+			f.help.Update(tea.WindowSizeMsg{Width: f.width, Height: f.height})
+			return f, f.help.Init()
+		case "enter":
+			if len(f.inputs) > 0 && f.spec.Fields[f.focus].Kind == "schedule" {
+				return f, f.openSchedule()
+			}
+			f.move(1)
 			return f, nil
-		case "tab", "enter":
+		case "tab":
 			f.move(1)
 			return f, nil
 		case "shift+tab":
 			f.move(-1)
 			return f, nil
 		}
-		if len(f.spec.Fields) > 0 && len(f.spec.Fields[f.focus].Options) > 0 {
-			options := f.spec.Fields[f.focus].Options
-			pos := 0
-			for i, v := range options {
-				if v == f.inputs[f.focus].Value() {
-					pos = i
-				}
-			}
+		if len(f.inputs) > 0 && len(f.spec.Fields[f.focus].Options) > 0 {
 			switch key {
 			case "left", "up", "h", "k":
-				pos = (pos + len(options) - 1) % len(options)
+				return f, f.chooseOption(-1)
 			case "right", "down", "l", "j", "space":
-				pos = (pos + 1) % len(options)
-			default:
-				return f, nil
+				return f, f.chooseOption(1)
 			}
-			if reason := f.spec.Fields[f.focus].Unavailable[options[pos]]; reason != "" {
-				f.err = fmt.Errorf("%s", reason)
-				return f, nil
-			}
-			f.inputs[f.focus].SetValue(options[pos])
-			if f.spec.Fields[f.focus].Key == "host" {
-				return f, f.load()
-			}
+			return f, nil
+		}
+		if len(f.inputs) > 0 && f.spec.Fields[f.focus].Kind == "schedule" {
 			return f, nil
 		}
 	}
 	if f.stage == "edit" && len(f.inputs) > 0 {
+		before := f.inputs[f.focus].Value()
 		var cmd tea.Cmd
 		f.inputs[f.focus], cmd = f.inputs[f.focus].Update(msg)
+		if before != f.inputs[f.focus].Value() {
+			return f, tea.Batch(cmd, f.changed(f.spec.Fields[f.focus].Key))
+		}
 		return f, cmd
 	}
 	return f, nil
+}
+func (f *Form) activate(id string) tea.Cmd {
+	switch id {
+	case "review":
+		if f.stage == "edit" {
+			return f.reviewCmd()
+		}
+	case "apply":
+		if f.stage == "review" {
+			return f.applyCmd()
+		}
+	case "back":
+		if len(f.inputs) == 0 {
+			f.err = ErrCancelled
+			return f.finish()
+		}
+		f.stage = "edit"
+		f.scroll = 0
+		return f.load()
+	case "cancel":
+		if f.stage == "applying" {
+			f.cancelRequested = true
+			f.cancel()
+			return nil
+		}
+		f.err = ErrCancelled
+		return f.finish()
+	case "return":
+		return f.finish()
+	case "advanced":
+		f.advanced = !f.advanced
+		if !f.advanced && len(f.inputs) > 0 && f.spec.Fields[f.focus].Advanced {
+			list := f.visible()
+			if len(list) > 0 {
+				f.focusField(list[0])
+			}
+		}
+	case "browse":
+		return f.startPicker()
+	default:
+		var index int
+		if strings.HasPrefix(id, "prev:") {
+			fmt.Sscanf(id, "prev:%d", &index)
+			f.focusField(index)
+			return f.chooseOption(-1)
+		}
+		if strings.HasPrefix(id, "next:") {
+			fmt.Sscanf(id, "next:%d", &index)
+			f.focusField(index)
+			return f.chooseOption(1)
+		}
+		if strings.HasPrefix(id, "schedule:") {
+			fmt.Sscanf(id, "schedule:%d", &index)
+			f.focusField(index)
+			return f.openSchedule()
+		}
+		if strings.HasPrefix(id, "browse:") {
+			fmt.Sscanf(id, "browse:%d", &index)
+			f.focusField(index)
+			return f.startPicker()
+		}
+	}
+	return nil
 }
 func (f *Form) fieldWindow() ([]int, int, int) {
 	list := f.visible()
@@ -355,64 +706,136 @@ func safe(s string) string {
 // Plain removes terminal control sequences from human-facing external text.
 func Plain(s string) string           { return safe(s) }
 func clip(s string, width int) string { return ansi.Truncate(s, max(1, width), "…") }
+func (f *Form) buttons() [][2]string {
+	switch f.stage {
+	case "edit":
+		return [][2]string{{"review", "Review ^S"}, {"advanced", "Advanced ^O"}, {"cancel", "Cancel Esc"}}
+	case "review":
+		return [][2]string{{"apply", "Apply ^S"}, {"back", "Back Esc"}, {"cancel", "Cancel"}}
+	case "result":
+		return [][2]string{{"return", "Return Enter"}}
+	default:
+		return [][2]string{{"cancel", "Cancel Esc"}}
+	}
+}
+func (f *Form) hits() []hitRegion {
+	if f.height < 6 {
+		return nil
+	}
+	var hits []hitRegion
+	if f.stage == "edit" {
+		list, start, rows := f.fieldWindow()
+		for n, i := range list[start:min(len(list), start+rows)] {
+			y := 2 + n*2
+			field := f.spec.Fields[i]
+			if len(field.Options) > 0 {
+				hits = append(hits, hitRegion{fmt.Sprintf("prev:%d", i), rect{2, y + 1, 2, 1}}, hitRegion{fmt.Sprintf("next:%d", i), rect{min(f.width-3, 5+ansi.StringWidth(safe(f.inputs[i].Value()))), y + 1, 2, 1}})
+			}
+			if field.Kind == "schedule" {
+				hits = append(hits, hitRegion{fmt.Sprintf("schedule:%d", i), rect{2, y + 1, max(0, f.width-4), 1}})
+			}
+			if field.Pick != nil {
+				hits = append(hits, hitRegion{fmt.Sprintf("browse:%d", i), rect{max(2, f.width-12), y, 10, 1}})
+			}
+			hits = append(hits, hitRegion{fmt.Sprintf("field:%d", i), rect{0, y, f.width, 2}})
+		}
+	}
+	x := 0
+	for _, b := range f.buttons() {
+		w := ansi.StringWidth(b[1]) + 4
+		if x+w <= f.width {
+			hits = append(hits, hitRegion{b[0], rect{x, max(0, f.height-2), w, 1}})
+		}
+		x += w + 1
+	}
+	visible := hits[:0]
+	for _, h := range hits {
+		if h.rect.x >= 0 && h.rect.y >= 0 && h.rect.x+h.rect.w <= f.width && h.rect.y+h.rect.h <= f.height {
+			visible = append(visible, h)
+		}
+	}
+	return visible
+}
 func (f *Form) View() tea.View {
-	title := lipgloss.NewStyle().Bold(true).Render(clip(f.spec.Title, f.width-2))
-	lines := []string{title, ""}
-	footer := ""
+	if f.help != nil {
+		return f.help.View()
+	}
+	if f.schedule != nil {
+		return f.schedule.View()
+	}
+	if f.picker != nil {
+		return f.pickerView()
+	}
+	t := styles(f.dark)
+	lines := []string{t.Title.Render(clip(f.spec.Title, f.width)), t.Muted.Render(clip("Tab next  ·  Shift+Tab back  ·  Ctrl+P browse", f.width))}
 	switch f.stage {
 	case "edit":
 		list, start, rows := f.fieldWindow()
 		for _, i := range list[start:min(len(list), start+rows)] {
 			field := f.spec.Fields[i]
 			prefix := "  "
+			label := safe(field.Label)
 			if i == f.focus {
 				prefix = "› "
+				label = t.Accent.Bold(true).Render(label)
 			}
-			lines = append(lines, clip(prefix+safe(field.Label), f.width))
+			line := prefix + label
+			if field.Pick != nil && f.width >= 20 {
+				line = pad(line, f.width-12) + t.Accent.Render("[Browse]")
+			}
+			lines = append(lines, clip(line, f.width))
 			value := f.inputs[i].View()
 			if len(field.Options) > 0 {
-				value = "◀ " + safe(f.inputs[i].Value()) + " ▶"
-				if reason := field.Unavailable[f.inputs[i].Value()]; reason != "" {
-					value += " (unavailable: " + safe(reason) + ")"
-				}
+				value = t.Accent.Render("◀ ") + safe(f.inputs[i].Value()) + t.Accent.Render(" ▶")
 			}
-			lines = append(lines, "  "+clip(value, f.width-3))
+			if field.Kind == "schedule" {
+				value = t.Schedule.Render(safe(f.inputs[i].Value())) + t.Muted.Render("  [Edit schedule ↵]")
+			}
+			lines = append(lines, "  "+clip(value, max(1, f.width-3)))
 		}
-		if f.spec.Live != nil {
-			lines = append(lines, "", clip(safe(f.spec.Live(f.Values())), f.width-2))
+		hint := f.live
+		if len(f.inputs) > 0 && f.spec.Fields[f.focus].Hint != "" {
+			hint = f.spec.Fields[f.focus].Hint
 		}
-		footer = "Ctrl+S review · Tab next · Shift+Tab back · Ctrl+O advanced · Esc cancel"
+		if hint != "" {
+			lines = append(lines, "", t.Muted.Render(clip(safe(hint), f.width)))
+		}
 	case "review":
-		body := strings.Split(safe(f.review.Text), "\n")
-		start := min(f.scroll, max(0, len(body)-1))
-		for _, line := range body[start:min(len(body), start+max(1, f.height-6))] {
-			lines = append(lines, clip(line, f.width-2))
-		}
-		footer = "Ctrl+S / y apply · Enter does nothing · Esc back · ↑↓ scroll"
-		if len(f.inputs) == 0 {
-			footer = "Ctrl+S / y apply · Enter does nothing · Esc cancel · ↑↓ scroll"
-		}
-	case "building":
-		lines = append(lines, "Preparing review…")
-		footer = "Esc cancel"
-	case "applying":
-		lines = append(lines, "Applying to the reviewed target…")
-		footer = "Esc stops waiting; dispatched operations may already have taken effect"
-	case "result":
-		body := strings.Split(safe(f.message), "\n")
+		body := strings.Split(ansi.Hardwrap(safe(f.review.Text), max(1, f.width-2), true), "\n")
 		start := min(f.scroll, max(0, len(body)-1))
 		lines = append(lines, body[start:min(len(body), start+max(1, f.height-7))]...)
-		footer = "Enter / Esc return · ↑↓ scroll"
+	case "building":
+		lines = append(lines, t.Warning.Render("Preparing review…"))
+	case "applying":
+		label := "Applying to the reviewed target…"
+		if f.cancelRequested {
+			label = "Stopping; waiting for the dispatched operation's result…"
+		}
+		lines = append(lines, t.Warning.Render(label), "Cancellation cannot undo an already dispatched write.")
+	case "result":
+		body := strings.Split(ansi.Hardwrap(safe(f.message), max(1, f.width-2), true), "\n")
+		start := min(f.scroll, max(0, len(body)-1))
+		lines = append(lines, body[start:min(len(body), start+max(1, f.height-7))]...)
 	}
-	if f.err != nil {
-		lines = append(lines, "", clip("Error: "+safe(f.err.Error()), f.width-2))
-	}
-	lines = lines[:min(len(lines), max(1, f.height-3))]
-	for len(lines) < f.height-2 {
+	lines = lines[:min(len(lines), max(0, f.height-4))]
+	for len(lines) < f.height-4 {
 		lines = append(lines, "")
 	}
-	lines = append(lines, clip(footer, f.width), "")
-	v := tea.NewView(strings.Join(lines, "\n"))
+	status := ""
+	if f.err != nil {
+		status = t.Error.Render("! " + safe(f.err.Error()))
+	} else if f.stage == "review" {
+		status = t.Muted.Render("Review target and changes. Enter does not apply.")
+	} else if f.stage == "edit" {
+		status = t.Muted.Render("Draft only · Ctrl+S reviews before saving")
+	}
+	lines = append(lines, clip(status, f.width), "")
+	buttons := []string{}
+	for _, b := range f.buttons() {
+		buttons = append(buttons, t.Accent.Render("[ "+b[1]+" ]"))
+	}
+	lines = append(lines, clip(strings.Join(buttons, " "), f.width), "")
+	v := tea.NewView(fitLines(strings.Join(lines, "\n"), f.width, f.height))
 	v.AltScreen = true
 	if f.spec.Mouse {
 		v.MouseMode = tea.MouseModeCellMotion
@@ -422,7 +845,7 @@ func (f *Form) View() tea.View {
 func RunForm(ctx context.Context, spec FormSpec) (FormResult, error) {
 	f := NewForm(ctx, spec)
 	defer f.cancel()
-	m, err := tea.NewProgram(f, tea.WithContext(ctx)).Run()
+	m, err := tea.NewProgram(f, tea.WithContext(ctx), tea.WithoutSignalHandler()).Run()
 	if err != nil {
 		return FormResult{}, err
 	}
@@ -447,7 +870,7 @@ func RunFormReview(ctx context.Context, spec FormSpec) (FormResult, error) {
 	}
 	f.review = r
 	f.stage = "review"
-	m, e := tea.NewProgram(f, tea.WithContext(ctx)).Run()
+	m, e := tea.NewProgram(f, tea.WithContext(ctx), tea.WithoutSignalHandler()).Run()
 	if e != nil {
 		return FormResult{}, e
 	}

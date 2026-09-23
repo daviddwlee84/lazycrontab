@@ -74,3 +74,4 @@ go.work.sum
 # Local build output
 /lazycrontab
 /bin/
+__pycache__/

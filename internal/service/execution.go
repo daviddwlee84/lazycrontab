@@ -18,16 +18,18 @@ import (
 )
 
 type Recipe struct {
-	CommandDigest string `json:"command_digest,omitempty"`
-	Original      string `json:"original,omitempty"`
-	Runner        string `json:"runner,omitempty"`
-	Group         string `json:"group,omitempty"`
-	PueuePath     string `json:"pueue_path,omitempty"`
-	Directory     string `json:"directory,omitempty"`
-	Output        string `json:"output,omitempty"`
-	Stderr        string `json:"stderr,omitempty"`
-	Script        string `json:"script,omitempty"`
-	Log           string `json:"log,omitempty"`
+	CommandDigest string            `json:"command_digest,omitempty"`
+	Original      string            `json:"original,omitempty"`
+	Runner        string            `json:"runner,omitempty"`
+	Group         string            `json:"group,omitempty"`
+	PueuePath     string            `json:"pueue_path,omitempty"`
+	Directory     string            `json:"directory,omitempty"`
+	Output        string            `json:"output,omitempty"`
+	Stderr        string            `json:"stderr,omitempty"`
+	Script        string            `json:"script,omitempty"`
+	Log           string            `json:"log,omitempty"`
+	ScriptTask    *ScriptTask       `json:"script_task,omitempty"`
+	Environment   map[string]string `json:"environment,omitempty"`
 }
 type Capabilities struct {
 	PueuePath    string   `json:"pueue_path,omitempty"`
@@ -161,10 +163,22 @@ func Compile(e Entry, r Recipe) (string, error) {
 	if raw == "" {
 		raw = e.Command
 	}
+	if r.ScriptTask != nil {
+		var err error
+		raw, err = scriptCommand(r)
+		if err != nil {
+			return "", err
+		}
+		// Structured values are shell arguments, never cron's percent/stdin
+		// syntax. Encode here so the existing wrapper can decode/re-encode once.
+		if e.Dialect == schedule.System {
+			raw = cronEscape(raw)
+		}
+	}
 	if strings.ContainsAny(raw, "\r\n\x00") {
 		return "", fmt.Errorf("use a script for multiline commands")
 	}
-	if r.Runner == "direct" && r.Directory == "" && r.Output == "" && r.Stderr == "" {
+	if r.Runner == "direct" && r.Directory == "" && r.Output == "" && r.Stderr == "" && len(r.Environment) == 0 {
 		return raw, nil
 	}
 	code, input := raw, ""
@@ -175,20 +189,30 @@ func Compile(e Entry, r Recipe) (string, error) {
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	payload := transport.Join([]string{shell, "-c", code})
+	payload := commandJoin([]string{shell, "-c", code})
+	if len(r.Environment) > 0 {
+		args := []string{"env"}
+		for _, key := range sortedKeys(r.Environment) {
+			if !environmentName.MatchString(key) || strings.ContainsAny(r.Environment[key], "\r\n\x00") {
+				return "", fmt.Errorf("invalid environment assignment %q", key)
+			}
+			args = append(args, key+"="+r.Environment[key])
+		}
+		payload = commandJoin(args) + " " + payload
+	}
 	if input != "" {
-		payload = "printf '%s' " + transport.Quote(input) + " | " + payload
+		payload = "printf '%s' " + commandQuote(input) + " | " + payload
 	}
 	if r.Directory != "" {
-		payload = "cd " + transport.Path(r.Directory) + " && " + payload
+		payload = "cd " + commandPath(r.Directory) + " && " + payload
 	}
 	if r.Output != "" || r.Stderr != "" {
 		payload = "( " + payload + " )"
 		if r.Output != "" {
-			payload += " >> " + transport.Path(r.Output)
+			payload += " >> " + commandPath(r.Output)
 		}
 		if r.Stderr != "" {
-			payload += " 2>> " + transport.Path(r.Stderr)
+			payload += " 2>> " + commandPath(r.Stderr)
 		} else if r.Output != "" {
 			payload += " 2>&1"
 		}
@@ -205,7 +229,7 @@ func Compile(e Entry, r Recipe) (string, error) {
 			args = append(args, "--working-directory", r.Directory)
 		}
 		args = append(args, "--", payload)
-		payload = transport.Join(args)
+		payload = commandJoin(args)
 	}
 	if e.Dialect == schedule.System {
 		payload = cronEscape(payload)
@@ -259,6 +283,14 @@ func (s *Service) RunPlan(ctx context.Context, snap Snapshot, id string, r *Reci
 	entry := Entry{Job: j, Host: snap.Host, Source: snap.Source, Dialect: snap.Document.Dialect}
 	command := j.Command
 	runner := "direct"
+	if r == nil {
+		// The source command stays authoritative for an ordinary Run. A valid
+		// sidecar may identify queue submission, but must not rebuild wrappers
+		// after an external environment change (for example SHELL).
+		if stored, err := LoadRecipe(entry); err == nil && stored.Runner == "pueue" {
+			runner = "pueue"
+		}
+	}
 	if r != nil {
 		if r.Runner == "pueue" {
 			caps := s.Capabilities(ctx, snap.Host)

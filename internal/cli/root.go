@@ -63,6 +63,9 @@ func Execute(version string) int {
 	}
 	if errors.Is(err, ui.ErrCancelled) || errors.Is(err, context.Canceled) {
 		code = 130
+		if !o.json {
+			return code
+		}
 	}
 	if o.json {
 		_ = json.NewEncoder(os.Stderr).Encode(map[string]any{"error": err.Error(), "exit_code": code})
@@ -117,7 +120,7 @@ func newRoot(o *options) *cobra.Command {
 		if e != nil {
 			return e
 		}
-		return ui.Dashboard(cmd.Context(), service.New(cfg), o.hostID(cfg), o.sourceID(cfg), o.config)
+		return ui.Dashboard(cmd.Context(), service.New(cfg), o.hostID(cfg), o.sourceID(cfg), o.config, o.workflow)
 	}
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the installed version (offline)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return o.emit(cmd, map[string]string{"version": o.version}, o.version)
@@ -131,6 +134,7 @@ func newRoot(o *options) *cobra.Command {
 	addBackup(root, o)
 	addOverview(root, o)
 	addUpgrade(root, o)
+	addConceptHelp(root, o)
 	completion := &cobra.Command{Use: "completion [bash|zsh|fish|powershell]", Short: "Generate shell completion without network access", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		switch args[0] {
 		case "bash":

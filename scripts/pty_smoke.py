@@ -43,6 +43,13 @@ class Session:
     def send(self, data):
         os.write(self.master, data.encode() if isinstance(data, str) else data)
 
+    def click(self, x, y):
+        """Click a zero-based terminal cell using real SGR press/release bytes."""
+        self.send(f"\x1b[<0;{x+1};{y+1}M\x1b[<0;{x+1};{y+1}m")
+
+    def wheel(self, x, y, down=True):
+        self.send(f"\x1b[<{65 if down else 64};{x+1};{y+1}M")
+
     def pump(self, duration=0.15):
         until = time.monotonic() + duration
         while time.monotonic() < until:
@@ -81,9 +88,17 @@ class Session:
         while self.process.poll() is None and time.monotonic() < until:
             self.pump()
         if self.process.poll() is None:
+            rows=subprocess.check_output(["ps","-axo","pid,ppid,pgid,stat,comm"],text=True).splitlines()[1:]
+            tree=[];owned={self.process.pid}
+            for _ in range(5):
+                for row in rows:
+                    parts=row.strip().split(None,4)
+                    if len(parts)==5 and (int(parts[0]) in owned or int(parts[1]) in owned):
+                        owned.add(int(parts[0]))
+                        if row not in tree:tree.append(row)
             self.process.terminate()
             self.process.wait(timeout=5)
-            raise AssertionError("TUI failed to exit")
+            raise AssertionError(f"TUI failed to exit; process tree={tree}; output={self.output[-1500:]!r}")
         def persistent_modes(raw):
             # BSD may set PENDIN when switching buffered input back to canonical
             # mode. It is transient kernel state, not a persistent tty setting.
@@ -137,7 +152,8 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
         env = dict(os.environ)
         env.update({"HOME": tmp, "TERM": "xterm-256color", "PATH": str(bin_dir)+":/usr/bin:/bin",
                     "VISUAL": str(bin_dir/"fixture-editor"), "EDITOR": str(bin_dir/"fixture-editor"),
-                    "FIXTURE_CRON": str(cron), "FIXTURE_PUEUE": str(root/"pueue-args")})
+                    "FIXTURE_CRON": str(cron), "FIXTURE_PUEUE": str(root/"pueue-args"),
+                    "FIXTURE_EXECUTED": str(root/"script-executed")})
         for key in ("LAZYCRONTAB_CONFIG", "LAZYCRONTAB_HOST", "LAZYCRONTAB_SOURCE", "NO_COLOR"):
             env.pop(key, None)
         for category in ("CONFIG", "DATA", "STATE", "CACHE"):
@@ -145,8 +161,10 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
         config = root/"config.toml"
         config.write_text('timezone="UTC"\nrefresh_seconds=60\n[[hosts]]\nid="lab"\nssh="fixture-host"\ntimezone="UTC"\n')
         script = root/"job.sh"
-        script.write_text("#!/bin/sh\necho fixture\n")
+        script.write_text('#!/bin/sh\nprintf ran > "${FIXTURE_EXECUTED:?}"\necho fixture\n')
         script.chmod(0o750)
+        (root/".ssh").mkdir()
+        (root/".ssh"/"config").write_text("Host fixture-host\n  HostName 127.0.0.1\nHost pick-me\n  HostName 127.0.0.2\nHost noisy-*\n  User nobody\n")
         base = ["--config", str(config)]
         subprocess.run([binary,*base,"edit","seed","--script",str(script),"--yes"],env=env,cwd=tmp,check=True,capture_output=True)
 
@@ -161,25 +179,64 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             for size in ((80,24),(40,12),(120,32)):
                 session.resize(*size)
                 session.pump()
+
+            # A true Playground tab can be left directly. Typing still owns
+            # numbers; modifier navigation retains the entire expression draft.
+            mark=session.mark();session.send("3")
+            session.expect("F1 Fields",mark)
+            mark=session.mark();session.send("1")
+            session.expect("Seed task",mark)
+            mark=session.mark();session.send("3")
+            session.expect("F1 Fields",mark)
+            session.send(b"\r\x01\x0b12")  # edit minute, Home, delete to end
+            session.pump(0.3)
+            session.expect("12 9 * * 1-5",mark)
+            mark=session.mark();session.send(b"\x1b1")
+            session.expect("Seed task",mark)
+            mark=session.mark();session.send(b"\x1b3")
+            session.expect("12 9 * * 1-5",mark)
+            # Use opens the same reviewed add workflow; cancelling returns
+            # to the still-intact Playground instead of a new child process.
+            mark=session.mark();session.send("u")
+            session.expect("add job",mark)
+            session.expect("12 9 * * 1-5",mark)
+            before=cron.read_text()
+            mark=session.mark();session.send(b"\x1b")
+            session.expect("12 9 * * 1-5",mark)
+            assert cron.read_text()==before,"Playground draft cancellation changed cron"
+            # The header tabs are actual mouse targets, including while editing.
+            mark=session.mark();session.click(17,0)
+            session.expect("Seed task",mark)
+            mark=session.mark();session.click(42,0)
+            session.expect("12 9 * * 1-5",mark)
+            session.send("1");session.pump()
+
             mark=session.mark();session.send("n")
             session.expect("add job",mark)
-            session.send("\t\tPTY backup\tprintf pty-value\tfixture remark\t")
-            session.send(b"\x1b[C")  # Daily -> Weekdays; no raw cron memorization.
-            mark=session.mark();session.send(b"\x13")
+            session.send("\t\tPTY backup\t\tprintf pty-value\t\t\t\tfixture remark")
+            mark=session.mark();session.send(b"\x1bOP")  # F1 concepts inside the draft
+            session.expect("Concepts",mark)
+            mark=session.mark();session.send(b"\x1b")
+            session.expect("add job",mark)
+            session.expect("PTY backup",mark)
+            # Click Review, Back and Apply through shared semantic buttons.
+            mark=session.mark();session.click(5,30)
             session.expect("proposed",mark)
             before=cron.read_text()
             session.send(b"\r")
             session.pump()
             assert cron.read_text()==before, "Enter applied a default-No review"
-            session.send(b"\x1b")
+            session.click(20,30)
             session.pump()
-            mark=session.mark();session.send(b"\x13")
+            mark=session.mark();session.click(5,30)
             session.expect("proposed",mark)
-            mark=session.mark();session.send(b"\x13")
+            mark=session.mark();session.click(5,30)
             session.expect("saved",mark)
             assert "PTY backup" in cron.read_text()
-            mark=session.mark();session.send(b"\r")
-            session.expect("lazycrontab",mark)
+            assert "fixture remark" in cron.read_text(), "typed remark was lost"
+            assert '"id":"seed"' in cron.read_text(), "Add replaced the selected existing job"
+            mark=session.mark();session.click(5,30)
+            session.expect("PTY backup",mark)
             session.pump(0.5)
 
             before=cron.read_text();mark=session.mark();session.send("d")
@@ -214,16 +271,60 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             session.expect("Agenda",mark)
             session.send(b"\x1b");session.send("1");session.pump()
             mark=session.mark();session.send("3")
-            session.expect("playground",mark)
-            session.send(b"\x1b");session.pump(0.5)
+            session.expect("F1 Fields",mark)
+            session.send("1");session.pump(0.5)
             mark=session.mark();session.send("?")
             session.expect("Contextual actions",mark)
+            # A wheel event in help cannot move the underlying selected job.
+            session.wheel(30,8);session.wheel(30,8);session.pump()
             session.send(b"\x1b");session.pump()
+            mark=session.mark();session.send("e")
+            session.expect("edit job",mark)
+            session.expect("Seed task",mark)
+            session.send(b"\x1b");session.pump()
+            # Host discovery reads only the private ssh config and selection is
+            # still merely a draft until its explicit registration review.
+            before=config.read_text();mark=session.mark();session.send("a")
+            session.expect("pick-me",mark)
+            session.send("/pick-me");session.send(b"\r");session.send(" ")
+            session.expect("Selected: pick-me",mark)
+            session.send(b"\x1b");session.pump()
+            assert config.read_text()==before,"host picker cancellation registered a host"
             session.close()
         except Exception:
             os.killpg(session.process.pid, signal.SIGKILL)
             session.process.wait()
             raise
+
+        # Standalone forms use the same script chooser and schedule component.
+        # Preflight reads files and runtime paths but never executes this script.
+        before=cron.read_text()
+        session=Session(binary,[*base,"add","--interactive","--name","PTY shell",
+                                "--preset","shell","--script",str(script),"--runtime","/bin/sh"],env,tmp,120,40)
+        try:
+            session.expect("Script on selected host")
+            mark=session.mark();session.click(110,10)
+            session.expect("Choose Script on selected host",mark)
+            session.send("job.sh");session.pump(0.4)
+            mark=session.mark();session.send(b"\r")
+            session.expect("Draft only",mark)
+            # Move from Script through Runtime, Directory and Arguments to Schedule.
+            mark=session.mark();session.send(b"\t\t\t\t\r")
+            session.expect("F1 Fields",mark)
+            session.pump(0.4)
+            mark=session.mark();session.send("u")
+            session.expect("add job",mark)
+            mark=session.mark();session.send(b"\x13")
+            session.expect("proposed",mark)
+            session.send(b"\x1b[6~")
+            session.expect("Execution checks",mark)
+            assert cron.read_text()==before,"script preflight saved or ran the job"
+            assert not (root/"script-executed").exists(),"script preflight executed the user's script"
+            session.send(b"\x1b");session.pump()
+            session.close(b"\x1b")
+            assert cron.read_text()==before,"cancelled script form changed cron"
+        except Exception:
+            os.killpg(session.process.pid,signal.SIGKILL);session.process.wait();raise
 
         # A bare command with global target flags must still open its wizard.
         session=Session(binary,[*base,"--host","lab","add"],env,tmp,80,24)
@@ -240,17 +341,20 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
         session.close()
         session=Session(binary,base,env,tmp,80,24)
         session.expect("Seed task")
+        mark=session.mark();session.send("?");session.expect("Contextual actions",mark)
+        session.send(b"\x1b");session.pump()
         process_rows=subprocess.check_output(["ps","-axo","pid,ppid,comm"],text=True).splitlines()[1:]
         children=[int(parts[0]) for row in process_rows if len(parts:=row.strip().split(None,2))==3 and int(parts[1])==session.process.pid]
         assert len(children)==1, children
         os.kill(children[0],signal.SIGTERM)
         session.close(None)
-        assert session.process.returncode==130
+        assert session.process.returncode==130, f"SIGTERM exited {session.process.returncode}, expected cancellation 130; output={session.output[-1800:]!r}"
         for marker in (root/"cache"/"lazycrontab"/"ssh").glob("*.json"):
             directory=Path(json.loads(marker.read_text())["directory"])
             assert str(directory).startswith(f"/tmp/lct-{os.getuid()}-")
             directory.rmdir()  # Fake SSH never creates a socket or master.
-        print("PTY passed: input, resize, add/review/Back/apply, delete cancel, SGR mouse, readable child errors, editor return, week/agenda, playground, help, SSH handoff, signal exit, terminal restoration")
+        assert not (root/"pueue-args").exists(),"smoke test submitted a Pueue job"
+        print("PTY passed: text ownership, resize, Playground tab/Alt navigation and preserved draft, shared add/review/Back/apply without replacing existing jobs, delete cancel, SGR tabs/forms/script picker, script preset preflight and schedule editor, readable child errors, editor return, week/agenda, modal wheel containment, SSH alias picker/auth handoff, signal exit, terminal restoration")
 
 
 if __name__ == "__main__":

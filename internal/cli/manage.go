@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/daviddwlee84/lazycrontab/internal/config"
+	"github.com/daviddwlee84/lazycrontab/internal/hostinventory"
 	"github.com/daviddwlee84/lazycrontab/internal/service"
 	"github.com/daviddwlee84/lazycrontab/internal/transport"
 	"github.com/daviddwlee84/lazycrontab/internal/ui"
@@ -199,69 +200,110 @@ func addHosts(root *cobra.Command, o *options) {
 			return e
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), message)
-		return transport.Interactive(child)
+		if err := transport.Interactive(child); err != nil {
+			return err
+		}
+		// One successful interactive login does not prove that a later batch
+		// connection can reuse it (for example, ControlPersist may be disabled).
+		snapshot, err := service.New(c).Snapshot(cmd.Context(), id, "user")
+		if err != nil {
+			return fmt.Errorf("native SSH completed, but the background crontab read still failed: %w; check the SSH sharing policy or load the key into your agent", err)
+		}
+		return o.emit(cmd, snapshot, fmt.Sprintf("SSH ready · %s · %d jobs", id, len(snapshot.Entries)))
 	}})
 	for _, op := range []string{"add", "edit", "remove"} {
 		addEntity(group, o, "hosts", op)
 	}
-	var from string
-	importCmd := &cobra.Command{Use: "import", Short: "Review SSH alias candidates without connecting", Args: exactArgs(0), RunE: func(cmd *cobra.Command, _ []string) error {
-		c, e := o.load()
-		if e != nil {
-			return e
-		}
-		candidates := []config.Host{}
-		switch from {
-		case "ssh":
-			home, e := os.UserHomeDir()
-			if e != nil {
-				return e
-			}
-			aliases := map[string]bool{}
-			if e = scanSSH(filepath.Join(home, ".ssh", "config"), aliases, map[string]bool{}, 0); e != nil {
-				return e
-			}
-			for alias := range aliases {
-				candidates = append(candidates, config.Host{ID: alias, SSH: alias})
-			}
-		case "dev":
-			raw, e := exec.CommandContext(cmd.Context(), "dev", "ssh", "list", "--json").Output()
-			if e != nil {
-				return e
-			}
-			var data any
-			if e = json.Unmarshal(raw, &data); e != nil {
-				return e
-			}
-			aliases := map[string]bool{}
-			collectAliases(data, aliases)
-			for alias := range aliases {
-				candidates = append(candidates, config.Host{ID: alias, SSH: alias})
-			}
-		default:
+	var discoverySource string
+	discoverCmd := &cobra.Command{Use: "discover", Short: "List SSH alias candidates without connecting", Args: exactArgs(0), RunE: func(cmd *cobra.Command, _ []string) error {
+		if discoverySource != "ssh" && discoverySource != "dev" {
 			return usage("--from must be ssh or dev")
 		}
-		sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
-		filtered := []config.Host{}
-		for _, h := range candidates {
-			if _, e := c.Host(h.ID); e != nil {
-				test := c
-				test.Hosts = append(append([]config.Host{}, c.Hosts...), h)
-				if test.Validate() == nil {
-					filtered = append(filtered, h)
+		inv, err := hostinventory.Discover(cmd.Context(), discoverySource)
+		if err != nil {
+			return err
+		}
+		var body strings.Builder
+		for _, c := range inv.Candidates {
+			fmt.Fprintf(&body, "%s\t%s\n", c.Alias, c.Status)
+		}
+		if len(inv.Candidates) == 0 {
+			body.WriteString("No exact SSH aliases found. Use hosts add --interactive to enter one.\n")
+		}
+		if !inv.Complete {
+			body.WriteString("Discovery is incomplete; uncertain entries require an explicit manual alias.\n")
+		}
+		for _, diagnostic := range inv.Diagnostics {
+			fmt.Fprintln(&body, diagnostic)
+		}
+		return o.emit(cmd, inv, strings.TrimSpace(body.String()))
+	}}
+	discoverCmd.Flags().StringVar(&discoverySource, "from", "ssh", "ssh or dev (static local inventory)")
+	group.AddCommand(discoverCmd)
+	var from string
+	var aliases []string
+	importCmd := &cobra.Command{Use: "import", Short: "Choose which SSH aliases to register", Args: exactArgs(0), RunE: func(cmd *cobra.Command, _ []string) error {
+		if from != "ssh" && from != "dev" {
+			return usage("--from must be ssh or dev")
+		}
+		c, err := o.load()
+		if err != nil {
+			return err
+		}
+		if tty() && !o.json && !o.dry && !o.yes && len(aliases) == 0 {
+			return ui.RunHostPicker(cmd.Context(), c, ui.HostPickerOptions{Source: from})
+		}
+		inv, err := hostinventory.Discover(cmd.Context(), from)
+		if err != nil {
+			return err
+		}
+		restricted := len(aliases) > 0
+		requested := map[string]bool{}
+		for _, alias := range aliases {
+			requested[alias] = false
+		}
+		registered := map[string]bool{}
+		for _, h := range c.AllHosts() {
+			registered[h.SSH] = true
+		}
+		selected := []config.Host{}
+		for _, candidate := range inv.Candidates {
+			if restricted {
+				if _, ok := requested[candidate.Alias]; !ok {
+					continue
 				}
+			}
+			if !candidate.Selectable {
+				continue
+			}
+			requested[candidate.Alias] = true
+			if registered[candidate.Alias] {
+				continue
+			}
+			if _, e := c.Host(candidate.Alias); e == nil {
+				continue
+			}
+			selected = append(selected, config.Host{ID: candidate.Alias, SSH: candidate.Alias})
+		}
+		for alias, found := range requested {
+			if !found {
+				return usage("alias %q is missing or uncertain; use hosts add ID --ssh ALIAS for an explicit registration", alias)
 			}
 		}
-		return o.approve(cmd, "Import host registrations (no connections)", filtered, pretty(filtered), func(context.Context) (any, string, error) {
-			for _, h := range filtered {
-				if e := config.SaveEntity(c.Path, "hosts", h.ID, "", h, false); e != nil {
-					return nil, "Previous registrations may have been saved.", e
-				}
-			}
-			return filtered, fmt.Sprintf("Registered %d hosts", len(filtered)), nil
+		if len(selected) == 0 {
+			return o.emit(cmd, selected, "No new selectable hosts to register")
+		}
+		plan, err := service.PlanHosts(c, selected)
+		if err != nil {
+			return err
+		}
+		return o.approve(cmd, "Register selected SSH hosts", plan, plan.Description(), func(ctx context.Context) (any, string, error) {
+			err := service.ApplyHosts(ctx, plan)
+			return selected, fmt.Sprintf("Registered %d hosts; use hosts test ID to check a connection", len(selected)), err
 		})
 	}}
 	importCmd.Flags().StringVar(&from, "from", "ssh", "ssh or dev")
+	importCmd.Flags().StringSliceVar(&aliases, "alias", nil, "Specific aliases to import (repeat or comma-separate)")
 	group.AddCommand(importCmd)
 	root.AddCommand(&cobra.Command{Use: "doctor", Short: "Inspect target cron and optional Pueue capabilities", Args: exactArgs(0), RunE: func(cmd *cobra.Command, _ []string) error {
 		c, e := o.load()
@@ -287,68 +329,6 @@ func addHosts(root *cobra.Command, o *options) {
 		}
 		return o.emit(cmd, items, pretty(items))
 	}})
-}
-func scanSSH(path string, aliases, seen map[string]bool, depth int) error {
-	if depth > 12 || seen[path] {
-		return nil
-	}
-	seen[path] = true
-	b, e := os.ReadFile(path)
-	if os.IsNotExist(e) {
-		return nil
-	}
-	if e != nil {
-		return e
-	}
-	home, _ := os.UserHomeDir()
-	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(strings.TrimSpace(line))
-		if len(f) < 2 || strings.HasPrefix(f[0], "#") {
-			continue
-		}
-		switch strings.ToLower(f[0]) {
-		case "host":
-			for _, a := range f[1:] {
-				if !strings.ContainsAny(a, "*?!#") {
-					aliases[a] = true
-				}
-			}
-		case "include":
-			for _, p := range f[1:] {
-				p = strings.Trim(p, "\"'")
-				if strings.HasPrefix(p, "~/") {
-					p = filepath.Join(home, p[2:])
-				}
-				if !filepath.IsAbs(p) {
-					p = filepath.Join(home, ".ssh", p)
-				}
-				files, _ := filepath.Glob(p)
-				for _, file := range files {
-					if e := scanSSH(file, aliases, seen, depth+1); e != nil {
-						return e
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-func collectAliases(v any, out map[string]bool) {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, value := range x {
-			if k == "alias" || k == "ssh_alias" {
-				if a, ok := value.(string); ok && a != "" && !strings.ContainsAny(a, "*?!") {
-					out[a] = true
-				}
-			}
-			collectAliases(value, out)
-		}
-	case []any:
-		for _, v := range x {
-			collectAliases(v, out)
-		}
-	}
 }
 func addSources(root *cobra.Command, o *options) {
 	group := &cobra.Command{Use: "sources", Short: "Manage user crontab and file source registrations"}
@@ -389,12 +369,15 @@ func addSources(root *cobra.Command, o *options) {
 	}})
 }
 func addEntity(parent *cobra.Command, o *options, kind, op string) {
-	var ssh, timezone, path, dialect, sourceKind, reload, pueue, connection string
+	var ssh, timezone, path, dialect, sourceKind, reload, pueue, connection, inventorySource string
 	var readOnly bool
 	cmd := &cobra.Command{Use: op + " [ID]", Short: op + " a " + kind + " registration", Args: cobra.MaximumNArgs(1)}
 	f := cmd.Flags()
 	f.StringVar(&timezone, "timezone", "", "IANA target timezone")
 	if kind == "hosts" {
+		if op == "add" {
+			f.StringVar(&inventorySource, "from", "ssh", "Alias picker source: ssh or dev")
+		}
 		f.StringVar(&ssh, "ssh", "", "OpenSSH alias or destination")
 		f.StringVar(&pueue, "pueue", "", "Target Pueue executable path")
 		f.StringVar(&connection, "lazypueue-connection", "", "Local lazypueue connection ID")
@@ -426,9 +409,23 @@ func addEntity(parent *cobra.Command, o *options, kind, op string) {
 				return usage("reload must be a JSON argv array")
 			}
 		}
+		if kind == "hosts" && op == "add" && inventorySource != "ssh" && inventorySource != "dev" {
+			return usage("--from must be ssh or dev")
+		}
 		c, e := o.load()
 		if e != nil {
 			return e
+		}
+		if kind == "hosts" && op == "add" && len(args) == 0 && tty() && !o.json && !o.dry {
+			fieldFlags := false
+			f.Visit(func(flag *pflag.Flag) {
+				if flag.Name != "from" && cmd.Root().PersistentFlags().Lookup(flag.Name) == nil {
+					fieldFlags = true
+				}
+			})
+			if !fieldFlags {
+				return ui.RunHostPicker(cmd.Context(), c, ui.HostPickerOptions{Source: inventorySource})
+			}
 		}
 		host := o.hostID(c)
 		id := ""
@@ -488,57 +485,6 @@ func addEntity(parent *cobra.Command, o *options, kind, op string) {
 				return value, "Registration removed", e
 			})
 		}
-		values := map[string]string{"id": id, "ssh": h.SSH, "timezone": timezone, "pueue": h.Pueue, "connection": h.LazypueueConnection, "kind": src.Kind, "path": src.Path, "dialect": src.Dialect, "reload": pretty(src.Reload), "readonly": strconv.FormatBool(src.ReadOnly)}
-		if kind == "hosts" {
-			values["timezone"] = h.Timezone
-		} else {
-			values["timezone"] = src.Timezone
-		}
-		build := func(_ context.Context, v map[string]string) (ui.Review, error) {
-			var value any
-			test := c
-			if kind == "hosts" {
-				item := config.Host{ID: v["id"], SSH: v["ssh"], Timezone: v["timezone"], Pueue: v["pueue"], LazypueueConnection: v["connection"]}
-				value = item
-				test.Hosts = []config.Host{}
-				for _, old := range c.Hosts {
-					if old.ID != id {
-						test.Hosts = append(test.Hosts, old)
-					}
-				}
-				test.Hosts = append(test.Hosts, item)
-			} else {
-				var argv []string
-				if v["reload"] != "" && v["reload"] != "null" {
-					if e := json.Unmarshal([]byte(v["reload"]), &argv); e != nil {
-						return ui.Review{}, fmt.Errorf("reload must be a JSON argv array")
-					}
-				}
-				item := config.Source{ID: v["id"], Host: host, Kind: v["kind"], Path: v["path"], Dialect: v["dialect"], Timezone: v["timezone"], Reload: argv, ReadOnly: v["readonly"] == "true", CronTZ: src.CronTZ}
-				if item.Kind != "file" && o.interactive {
-					item.Dialect = "system"
-				}
-				value = item
-				test.Sources = []config.Source{}
-				for _, old := range c.Sources {
-					if old.ID != id || old.Host != host {
-						test.Sources = append(test.Sources, old)
-					}
-				}
-				test.Sources = append(test.Sources, item)
-			}
-			if e := test.Validate(); e != nil {
-				return ui.Review{}, e
-			}
-			if op == "edit" && v["id"] != id {
-				return ui.Review{}, fmt.Errorf("ID is immutable; add a new registration instead")
-			}
-			return ui.Review{Text: c.Path + "\n" + pretty(value), Data: value}, nil
-		}
-		apply := func(_ context.Context, v map[string]string, r ui.Review) (string, error) {
-			e := config.SaveEntity(c.Path, kind, v["id"], host, r.Data, false)
-			return "Saved " + kind + " " + v["id"], e
-		}
 		business := false
 		f.Visit(func(flag *pflag.Flag) {
 			if cmd.Root().PersistentFlags().Lookup(flag.Name) == nil {
@@ -546,36 +492,123 @@ func addEntity(parent *cobra.Command, o *options, kind, op string) {
 			}
 		})
 		wizard := o.interactive || (!business && (len(args) == 0 || op == "edit") && tty() && !o.json && !o.dry)
+		spec, values := entityFormSpec(c, kind, op, id, host, h, src, wizard)
 		if wizard {
-			keys := []string{"id", "ssh", "timezone", "pueue", "connection"}
-			if kind == "sources" {
-				keys = []string{"id", "kind", "path", "dialect", "timezone", "reload", "readonly"}
-			}
-			fields := []ui.Field{}
-			for _, key := range keys {
-				field := ui.Field{Key: key, Label: key, Value: values[key]}
-				if key == "kind" {
-					field.Options = []string{"file", "user", "system"}
-				}
-				if key == "dialect" {
-					field.Options = []string{"supercronic", "system"}
-				}
-				if key == "readonly" {
-					field.Options = []string{"false", "true"}
-				}
-				fields = append(fields, field)
-			}
-			_, e = ui.RunForm(cmd.Context(), ui.FormSpec{Title: op + " " + kind, Fields: fields, Build: build, Apply: apply, Mouse: c.Mouse})
+			_, e = ui.RunForm(cmd.Context(), spec)
 			return e
 		}
 		if id == "" {
 			return usage("provide an ID and required fields, or --interactive")
 		}
-		r, e := build(cmd.Context(), values)
+		r, e := spec.Build(cmd.Context(), values)
 		if e != nil {
 			return usage("%v; use --interactive for a wizard", e)
 		}
-		return o.approve(cmd, op+" "+kind, r.Data, r.Text, func(ctx context.Context) (any, string, error) { msg, e := apply(ctx, values, r); return r.Data, msg, e })
+		return o.approve(cmd, op+" "+kind, r.Data, r.Text, func(ctx context.Context) (any, string, error) {
+			message, err := spec.Apply(ctx, values, r)
+			return r.Data, message, err
+		})
 	}
 	parent.AddCommand(cmd)
+}
+
+// entityFormSpec keeps standalone forms and embedded dashboard forms on the same
+// validation and mutation path. Flag-only calls use the same Build and Apply.
+func entityFormSpec(c config.Config, kind, op, id, host string, h config.Host, src config.Source, interactive bool) (ui.FormSpec, map[string]string) {
+	values := map[string]string{"id": id, "ssh": h.SSH, "timezone": h.Timezone, "pueue": h.Pueue, "connection": h.LazypueueConnection, "kind": src.Kind, "path": src.Path, "dialect": src.Dialect, "reload": pretty(src.Reload), "readonly": strconv.FormatBool(src.ReadOnly)}
+	if kind == "hosts" {
+		values["timezone"] = h.Timezone
+	} else {
+		values["timezone"] = src.Timezone
+	}
+	build := func(_ context.Context, v map[string]string) (ui.Review, error) {
+		var value any
+		test := c
+		if kind == "hosts" {
+			item := config.Host{ID: v["id"], SSH: v["ssh"], Timezone: v["timezone"], Pueue: v["pueue"], LazypueueConnection: v["connection"]}
+			value = item
+			test.Hosts = []config.Host{}
+			for _, old := range c.Hosts {
+				if old.ID != id {
+					test.Hosts = append(test.Hosts, old)
+				}
+			}
+			test.Hosts = append(test.Hosts, item)
+		} else {
+			var argv []string
+			if v["reload"] != "" && v["reload"] != "null" {
+				if e := json.Unmarshal([]byte(v["reload"]), &argv); e != nil {
+					return ui.Review{}, fmt.Errorf("reload must be a JSON argv array")
+				}
+			}
+			item := config.Source{ID: v["id"], Host: host, Kind: v["kind"], Path: v["path"], Dialect: v["dialect"], Timezone: v["timezone"], Reload: argv, ReadOnly: v["readonly"] == "true", CronTZ: src.CronTZ}
+			if item.Kind != "file" && interactive {
+				item.Dialect = "system"
+			}
+			value = item
+			test.Sources = []config.Source{}
+			for _, old := range c.Sources {
+				if old.ID != id || old.Host != host {
+					test.Sources = append(test.Sources, old)
+				}
+			}
+			test.Sources = append(test.Sources, item)
+		}
+		if e := test.Validate(); e != nil {
+			return ui.Review{}, e
+		}
+		if op == "edit" && v["id"] != id {
+			return ui.Review{}, fmt.Errorf("ID is immutable; add a new registration instead")
+		}
+		return ui.Review{Text: c.Path + "\n" + pretty(value), Data: value}, nil
+	}
+	apply := func(_ context.Context, v map[string]string, r ui.Review) (string, error) {
+		e := config.SaveEntity(c.Path, kind, v["id"], host, r.Data, false)
+		return "Saved " + kind + " " + v["id"], e
+	}
+	keys := []string{"id", "ssh", "timezone", "pueue", "connection"}
+	if kind == "sources" {
+		keys = []string{"id", "kind", "path", "dialect", "timezone", "reload", "readonly"}
+	}
+	fields := []ui.Field{}
+	for _, key := range keys {
+		field := ui.Field{Key: key, Label: key, Value: values[key]}
+		if kind == "hosts" && (key == "timezone" || key == "pueue" || key == "connection") {
+			field.Advanced = true
+		}
+		if kind == "hosts" && (key == "pueue" || key == "connection") && h.Pueue == "" && h.LazypueueConnection == "" {
+			continue
+		}
+		if key == "kind" {
+			field.Options = []string{"file", "user", "system"}
+		}
+		if key == "dialect" {
+			field.Options = []string{"supercronic", "system"}
+		}
+		if key == "readonly" {
+			field.Options = []string{"false", "true"}
+		}
+		fields = append(fields, field)
+	}
+
+	title := op + " " + kind
+	if kind == "sources" {
+		title += " · " + host
+	}
+	return ui.FormSpec{Title: title, Fields: fields, Build: build, Apply: apply, Mouse: c.Mouse, Theme: c.Theme}, values
+}
+
+func newSourceModel(ctx context.Context, cfg config.Config, host string) (tea.Model, error) {
+	if host == "" {
+		host = cfg.DefaultHost
+	}
+	if host == "all" {
+		return nil, usage("choose one host before adding a source")
+	}
+	if _, err := cfg.Host(host); err != nil {
+		return nil, err
+	}
+	source := config.Source{Host: host, Kind: "file", Dialect: "supercronic"}
+	spec, _ := entityFormSpec(cfg, "sources", "add", "", host, config.Host{}, source, true)
+	return ui.NewForm(ctx, spec), nil
 }

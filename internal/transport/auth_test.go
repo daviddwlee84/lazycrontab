@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,5 +51,14 @@ func TestAuthenticationHonorsSharedPolicyAndOwnsOnlyFallback(t *testing.T) {
 	read = (Native{}).Command(context.Background(), h, []string{"true"})
 	if strings.Contains(strings.Join(read.Args, " "), record.Directory) {
 		t.Fatal("fallback overrode new explicit user policy")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd, _, e = (Native{ConnectTimeout: 17}).Authentication(ctx, h)
+	if e != nil || !strings.Contains(strings.Join(cmd.Args, " "), "ConnectTimeout=17") {
+		t.Fatal("configured timeout was lost", cmd, e)
+	}
+	cancel()
+	if e = cmd.Run(); !errors.Is(e, context.Canceled) {
+		t.Fatal("shared-policy authentication ignored cancellation", e)
 	}
 }

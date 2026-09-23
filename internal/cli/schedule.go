@@ -1,16 +1,14 @@
 package cli
 
 import (
-	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/daviddwlee84/lazycrontab/internal/schedule"
-	"github.com/daviddwlee84/lazycrontab/internal/transport"
+	"github.com/daviddwlee84/lazycrontab/internal/service"
 	"github.com/daviddwlee84/lazycrontab/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -28,7 +26,7 @@ func scheduleFields(expr string) []ui.Field {
 	}
 	return []ui.Field{
 		{Key: "template", Label: "Pattern (←/→ choose)", Value: "Custom cron", Options: []string{"Custom cron", "Every N minutes", "Hourly", "Daily", "Weekdays", "Weekly", "Monthly"}},
-		{Key: "schedule", Label: "Cron expression", Value: expr, Show: when("Custom cron")},
+		{Key: "schedule", Label: "Cron expression", Value: expr, Kind: "schedule", Show: when("Custom cron")},
 		{Key: "interval", Label: "Interval in minutes", Value: "15", Show: when("Every N minutes")},
 		{Key: "time", Label: "Time HH:MM", Value: "09:00", Show: when("Daily", "Weekdays", "Weekly", "Monthly")},
 		{Key: "weekdays", Label: "Weekday list: 0=Sunday … 6=Saturday", Value: "1-5", Show: when("Weekly")},
@@ -143,6 +141,9 @@ func addSchedule(root *cobra.Command, o *options) {
 		cmd.Flags().StringVar(&dialect, "dialect", "system", "system or supercronic")
 		cmd.Flags().StringVar(&timezone, "timezone", "Local", "IANA schedule timezone")
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
+			if dialect != string(schedule.System) && dialect != string(schedule.Supercronic) {
+				return usage("unknown cron dialect %q; choose system or supercronic", dialect)
+			}
 			loc, e := time.LoadLocation(timezone)
 			if e != nil {
 				return usage("%v", e)
@@ -170,41 +171,28 @@ func addSchedule(root *cobra.Command, o *options) {
 			if expr == "" {
 				expr = "0 9 * * 1-5"
 			}
-			fields := append(scheduleFields(expr), ui.Field{Key: "destination", Label: "After preview", Value: "Show expression", Options: []string{"Show expression", "Create job draft"}, Advanced: true})
-			result, e := ui.RunForm(cmd.Context(), ui.FormSpec{Title: "Schedule playground · no crontab changes", Fields: fields, Mouse: true, Live: liveSchedule(schedule.Dialect(dialect), loc, "en"), Build: func(ctx context.Context, v map[string]string) (ui.Review, error) {
-				x, e := expression(v)
-				if e != nil {
-					return ui.Review{}, e
-				}
-				sc, e := schedule.Parse(x, schedule.Dialect(dialect), loc, "en")
-				if e != nil {
-					return ui.Review{}, e
-				}
-				next, e := sc.NextN(ctx, time.Now().In(loc), 10)
-				return ui.Review{Text: x + "\n" + sc.Description + "\n" + pretty(next) + "\n\nNext: " + v["destination"] + ". No job is saved by this preview.", Data: x}, e
-			}, Apply: func(_ context.Context, v map[string]string, r ui.Review) (string, error) {
-				if v["destination"] == "Create job draft" {
-					return fmt.Sprint(r.Data) + "\nPress Enter to open the prefilled job wizard.", nil
-				}
-				return fmt.Sprint(r.Data), nil
-			}})
-			if e == nil && result.Values["destination"] == "Create job draft" {
-				exe, err := os.Executable()
-				if err != nil {
-					return err
-				}
-				args := []string{"add", "--interactive", "--schedule", fmt.Sprint(result.Review.Data)}
-				if o.config != "" {
-					args = append(args, "--config", o.config)
-				}
-				if o.host != "" {
-					args = append(args, "--host", o.host)
-				}
-				if o.source != "" {
-					args = append(args, "--source", o.source)
-				}
-				return transport.Interactive(exec.CommandContext(cmd.Context(), exe, args...))
+			if o.dry {
+				return usage("playground previews do not write; omit --dry-run or provide --schedule for noninteractive output")
 			}
+			cfg, e := o.load()
+			if e != nil {
+				return e
+			}
+			host, source := o.hostID(cfg), o.sourceID(cfg)
+			if host == "all" {
+				host = cfg.DefaultHost
+			}
+			if source == "all" {
+				source = cfg.DefaultSource
+			}
+			svc := service.New(cfg)
+			_, e = ui.RunScheduleEditor(cmd.Context(), ui.ScheduleEditorOptions{
+				Expression: expr, Dialect: schedule.Dialect(dialect), Timezone: loc.String(), Locale: cfg.Locale, Mouse: cfg.Mouse, Theme: cfg.Theme,
+				Target: host + " / " + source,
+				OnUse: func(use ui.ScheduleUseMsg) (tea.Model, error) {
+					return newJobModel(cmd.Context(), svc, host, source, "add", "", use.Expression)
+				},
+			})
 			return e
 		}
 		if name == "playground" {

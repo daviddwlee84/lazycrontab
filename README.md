@@ -28,7 +28,7 @@ lazycrontab overview --timezone Asia/Taipei
 
 ## Dashboard and forms
 
-Hosts/sources, jobs and details stay visible together. Narrow terminals show the focused pane. Each host loads independently; failed refreshes retain their last snapshot with an error and observation time.
+The dashboard uses colored focus, selection and status indicators. Wide terminals show hosts/sources, jobs and details; medium widths show jobs/details, with hosts available through Tab; narrow terminals show the focused pane. Each host loads independently; failed refreshes retain their last snapshot with an error and observation time.
 
 | Key | Action |
 | --- | --- |
@@ -41,6 +41,8 @@ Hosts/sources, jobs and details stay visible together. Narrow terminals show the
 | `r` | Review a manual run, optionally through Pueue |
 | `E` / `L` | Edit an explicit script / inspect logs |
 | `1` / `2` / `3` | Jobs / Week / Playground |
+| `Alt+1` / `Alt+2` / `Alt+3` | Switch views while editing; preserve the draft |
+| `F1` | Concepts and practical help (outside the cron editor) |
 | `z` | Change this session's display timezone |
 | `Ctrl+R` | Refresh |
 | `a` / `s` | Add host / source |
@@ -51,11 +53,13 @@ Hosts/sources, jobs and details stay visible together. Narrow terminals show the
 
 Effective bindings drive both help and dispatch. Printable characters belong to the focused input, including `q`, `j` and `/`.
 
-Forms use Tab/Shift+Tab, arrows for choices and `Ctrl+O` for advanced settings. `Ctrl+S` prepares a review; **`y` or another Ctrl+S applies, Enter does not approve**. Esc returns to the draft or cancels a standalone confirmation. Results remain visible until acknowledged.
+Forms use Tab/Shift+Tab, arrows or clickable controls for choices, `Ctrl+P`/Browse for target paths and `Ctrl+O` for advanced settings. Enter on Schedule opens the shared cron editor; F1 opens contextual concepts and returns to the same draft. `Ctrl+S` prepares a review; **`y` or another Ctrl+S applies, Enter does not approve**. Esc returns to the draft or cancels a standalone confirmation. Results remain visible until acknowledged. Job/source forms and host selection stay inside the dashboard; external editors and native SSH temporarily take terminal ownership.
 
 Week starts on Monday. Arrows select a day/hour; Enter opens exact agenda rows; PgUp/PgDn pages; `[` / `]` changes weeks. UTC offsets distinguish repeated DST times. Counts and agenda are bounded and label truncation. These are forecast triggers, not execution history. Pueue jobs show enqueue times; execution may wait in the queue.
 
-Playground shares the job builder and parser. Its advanced “After preview” choice can open a prefilled job draft. Preview alone never installs a job.
+Playground is a persistent tab, sharing the cron editor and parser with job forms. Each box represents one cron field: `*/5`, `1,15` and ranges fit inside a box. F1–F4 switch fields, presets, limited English phrases and macros. Errors explain the affected field; incomplete drafts remain editable. Paste a complete expression to populate matching boxes. Press **u / Use in new job** to open an add draft with the expression filled in; returning preserves the experiment. Copy and preview do not install a job. While editing, numbers are text: use Alt+1/2/3, clickable tabs, or Esc followed by a view shortcut.
+
+Tabs, fields, selectors, action buttons, week cells, agenda rows and help support the mouse. The wheel scrolls the hovered pane; overlays consume their own events. Turn capture off with `m` to restore native terminal text selection. Theme follows `theme = "auto"`, `"dark"` or `"light"`; `NO_COLOR` retains text and shape indicators.
 
 ## CLI and automation
 
@@ -74,6 +78,8 @@ lazycrontab enable JOB_ID --yes
 lazycrontab remove JOB_ID --dry-run --json
 lazycrontab run JOB_ID --yes --json
 lazycrontab logs JOB_ID --lines 200
+lazycrontab check JOB_ID --json
+lazycrontab help execution-environment
 lazycrontab backup list --json
 lazycrontab backup restore BACKUP_ID --dry-run
 lazycrontab schedule next '0 0 * * 7' --timezone Europe/London --count 10
@@ -87,13 +93,17 @@ Bare add/edit, host/source forms and schedule build open wizards in a terminal. 
 
 Data uses stdout and diagnostics stderr. Exit codes: 0 success, 1 operation failure, 2 usage/config error, 130 cancellation. Direct CLI run failures preserve ordinary child exit codes. Successful Pueue submission means queued, not completed.
 
+Ordinary cancellation is quiet in the installed binary. When using `go run`, the Go launcher itself may still print `exit status 130`.
+
 ## SSH fleet and sources
 
 ```sh
 lazycrontab hosts add
 lazycrontab hosts add lab --ssh lab-server --timezone UTC --yes
-lazycrontab hosts import --from ssh --dry-run
-lazycrontab hosts import --from dev --yes
+lazycrontab hosts discover --from ssh --json
+lazycrontab hosts import --from ssh
+lazycrontab hosts import --from dev --alias lab-server --dry-run
+lazycrontab hosts import --from dev --alias lab-server --yes
 lazycrontab hosts test lab
 lazycrontab --host lab
 lazycrontab --host lab hosts authenticate
@@ -106,15 +116,31 @@ lazycrontab sources add system-backup --kind system --dialect system \
 lazycrontab --host lab --source worker list
 ```
 
-Static SSH import follows Include files and concrete Host aliases without connecting or evaluating Match commands. Dev import consumes `dev ssh list --json` when installed. Ordinary startup probes only registered hosts.
+Bare `hosts add` opens a searchable alias picker with nothing selected. Use Space or click a checkbox, then **Add selected** (`Ctrl+S`). Registrations are saved locally and each selected host's crontab is checked asynchronously. An unreachable host stays registered; the result offers **Retry** and native **Authenticate** for the selected host. Timezone and Pueue settings are optional advanced configuration, not initial setup questions. `hosts import` opens the same picker in a terminal.
 
-Native OpenSSH retains aliases, ProxyJump, agents and host-key checking. Background operations use BatchMode. Explicit authentication hands the terminal to SSH and honors configured ControlPath policies. Without one, an explicitly authenticated app-owned master expires after ten idle minutes and can be reused by CLI handoffs. No password is stored. Short private `/tmp/lct-UID-*` socket directories are referenced from XDG cache.
+Static discovery follows Include files and concrete Host aliases without connecting or evaluating Match commands. Conditional or unsupported declarations remain uncertain and can be entered explicitly through **Manual alias**. The optional dev source consumes the versioned `dev ssh list --json` API, including its active/selectable state. It never reads dev's private remote or credential files. Ordinary startup probes only registered hosts; your entire SSH config is not automatically added to the dashboard. In automation, `--alias` chooses specific entries; import with `--yes` and no `--alias` registers every new selectable candidate.
+
+Native OpenSSH retains aliases, ProxyJump, agents and host-key checking. Background operations use BatchMode. Explicit authentication hands the terminal to SSH and honors configured ControlPath policies. Without one, an explicitly authenticated app-owned master expires after ten idle minutes and can be reused across CLI invocations. A fresh background read checks that the connection remains usable after the handoff. Passwords and MFA stay with native SSH; lazycrontab stores no password. Short private `/tmp/lct-UID-*` socket directories are referenced from XDG cache. See [SSH hosts and authentication](docs/ssh-hosts.md) for keys, agents, connection reuse and the optional dev integration.
 
 File paths must be absolute or quoted `~/...` paths expanded on the target. Symlinks can be read, but writing requires registering the resolved regular-file path. Source removal only removes registration. System sources need ordinary read permission; there is no automatic sudo escalation.
 
 Supercronic saving and reload have separate results. For example, configure `reload = ["docker", "kill", "--signal=USR2", "worker-cron"]`, then explicitly invoke `sources reload`. The app never guesses a container/PID. A successful reload command does not independently prove runtime adoption.
 
 ## Scripts, execution and helpers
+
+The add wizard offers executable/shebang, Shell, Python, uv project and uv standalone presets. Choose the target-side script, then browse detected runtimes and projects; working-directory defaults and read-only findings appear in the draft. Python virtualenvs use their interpreter directly, without activation. uv project flags are generated from your selection.
+
+```sh
+lazycrontab add --preset uv-project --script ./jobs/report.py \
+  --project . --schedule '0 9 * * 1-5' --dry-run
+lazycrontab add --preset python --runtime /srv/report/.venv/bin/python \
+  --script /srv/report/daily.py --arg 'customer reports' \
+  --env MODE=batch --schedule '0 3 * * *' --yes
+lazycrontab check JOB_ID
+lazycrontab help uv
+```
+
+The helper resolves relative paths against a visible target-side base and generates an explicit working directory. Cron does not inherit your interactive `.zshrc`: select the runtime and required literal environment values. Preflight inspects files and project markers; it never runs the script, imports its modules or installs dependencies. A normal uv job may prepare its environment when the scheduled command actually executes. See [script presets, paths and environment](docs/scripts.md).
 
 ```sh
 lazycrontab edit JOB_ID --script /home/me/bin/backup \
