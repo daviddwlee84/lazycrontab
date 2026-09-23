@@ -308,6 +308,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		case "group":
 			field.Label = "Existing Pueue group"
 			field.Show = func(v map[string]string) bool { return v["runner"] == "pueue" }
+			field.Hint = pueueOutputHint
 		case "environment":
 			field.Label = "Variables (literal NAME=value; quote spaces)"
 		case "output":
@@ -319,6 +320,13 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		case "log":
 			field.Label = "Existing log to inspect"
 			field.Pick = jobPathPicker(s, chosenHost, key, false)
+		}
+		if key == "output" || key == "stderr" || key == "log" {
+			// Keep explicit paths visible, including drafts switched from direct
+			// execution. Hiding a configured redirect would conceal its effect.
+			field.Show = func(v map[string]string) bool {
+				return v["runner"] != "pueue" || v[key] != ""
+			}
 		}
 		fields = append(fields, field)
 	}

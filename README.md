@@ -157,6 +157,8 @@ Pueue needs a 4.x CLI and reachable daemon on the job's host. Groups are selecte
 
 Output preserves existing behavior by default. `--output PATH` appends stdout/stderr together; `--stderr PATH` separates stderr. Parent directories must exist. Pueue uses its own capture by default. Review shows the generated shell command and required cron percent escaping.
 
+For Pueue, the wizard hides empty output/error/log file fields and points to `pueue log` or lazypueue. Existing explicit paths remain visible and editable; switching runners never silently clears them. Explicit redirects apply to the queued task, so redirected output goes to those files instead of Pueue's capture. The task ID and errors from cron invoking `pueue add` remain separate from the task's output.
+
 Scripts use explicit paths, private editing copies, diffs, conflict checks, backups and permission-preserving replacement. Arbitrary command strings are not searched heuristically for a script filename.
 
 System-cron manual runs use the displayed cron-like target environment. Supercronic manual runs inherit the selected host's noninteractive environment plus file assignments; an existing container process's environment/cwd cannot be recovered from the file. Neither mode claims exact daemon/PAM reproduction. Local cancellation terminates owned process groups; SSH interruption can leave the remote result unknown.

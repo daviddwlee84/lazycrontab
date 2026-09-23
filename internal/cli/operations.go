@@ -22,6 +22,9 @@ func entry(snap service.Snapshot, id string) (service.Entry, error) {
 	}
 	return service.Entry{}, fmt.Errorf("job %q not found", id)
 }
+
+const pueueOutputHint = "Pueue captures stdout/stderr. View: pueue log or lazypueue."
+
 func pueueFields(ctx context.Context, s *service.Service, host string) []ui.FieldUpdate {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -32,7 +35,7 @@ func pueueFields(ctx context.Context, s *service.Service, host string) []ui.Fiel
 	}
 	out := []ui.FieldUpdate{{Key: "runner", Options: []string{"direct", "pueue"}, Unavailable: disabled}}
 	if caps.Ready {
-		out = append(out, ui.FieldUpdate{Key: "group", Options: append([]string{""}, caps.Groups...)})
+		out = append(out, ui.FieldUpdate{Key: "group", Options: append([]string{""}, caps.Groups...), Hint: pueueOutputHint})
 	}
 	return out
 }
