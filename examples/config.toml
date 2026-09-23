@@ -1,0 +1,52 @@
+# Optional: local user crontab works without this file.
+default_host = "local"
+default_source = "user"
+locale = "en" # or zh_TW for schedule descriptions
+timezone = "Local" # display only; does not rewrite scheduling timezone
+theme = "auto" # auto, dark, light
+mouse = true
+refresh_seconds = 30
+connect_timeout_seconds = 10
+max_parallel = 4
+
+[[hosts]]
+id = "local"
+timezone = "Asia/Taipei"
+
+[[hosts]]
+id = "lab"
+ssh = "lab-server"
+timezone = "UTC"
+# pueue = "/home/me/.cargo/bin/pueue"
+# lazypueue_connection = "lab"
+
+[[sources]]
+id = "worker"
+host = "lab"
+kind = "file"
+path = "/srv/worker/crontab"
+dialect = "supercronic"
+timezone = "UTC" # match the actual Supercronic process
+read_only = false
+# reload = ["docker", "kill", "--signal=USR2", "worker-cron"]
+
+[[sources]]
+id = "system"
+host = "local"
+kind = "system"
+path = "/etc/crontab"
+dialect = "system"
+read_only = true
+
+# For a confirmed system daemon supporting CRON_TZ:
+# [[sources]]
+# id = "user"
+# host = "lab"
+# kind = "user"
+# dialect = "system"
+# cron_tz = true
+
+[keys]
+# Semantic action IDs; conflicts and reserved keys are errors.
+# add = "N"
+# refresh = "ctrl+r"

@@ -70,3 +70,7 @@ go.work.sum
 *.local
 .direnv/
 # <<< dev gitignore <<<
+
+# Local build output
+/lazycrontab
+/bin/
