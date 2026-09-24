@@ -1240,8 +1240,8 @@ func (m *dashboard) View() tea.View {
 	}
 	content := fitLines(header+"\n"+t.Muted.Render(clip(contextLine, m.width))+"\n"+body, m.width, m.height)
 	if modal != nil {
-		box := modal.modalLayout().box
-		content = overlayText(content, modal.modalPanel(), box.x, box.y+2, m.width, m.height)
+		box, panel := modal.popupPanel()
+		content = overlayText(content, panel, box.x, box.y+2, m.width, m.height)
 	}
 	v := tea.NewView(content)
 	v.AltScreen = true

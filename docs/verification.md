@@ -2,6 +2,22 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Add/Edit draft popup revision
+
+UI/CLI race tests, vet and source build passed on macOS arm64 and Linux arm64
+(Go 1.26.6 in a disposable container). The extended review/draft, general and
+managed-script PTY harnesses passed on both. They verify the retained dashboard,
+text ownership, Alt view switching with draft retention, review/Back/save,
+cancellation without publishing script files, and one write per confirmation.
+
+Draft coverage includes nested help, path picker, schedule and multiline editors,
+all basic/advanced fields at 40×12, mouse focus/wheel/buttons and outside-click
+containment. Standalone Playground → Add → cancel also retains its full surface
+and expression. Model tests cover resize, nested input coordinates, stale mouse
+presses and explicit dashboard-only popup activation. Wide and narrow VHS images
+were visually inspected; terminal restoration checks passed. Tests use private
+fixtures and do not execute scheduled scripts or submit real Pueue tasks.
+
 ## Review popup and Pueue command revision
 
 The full race suite, vet and source build passed on macOS arm64 and Linux arm64

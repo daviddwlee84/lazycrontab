@@ -492,7 +492,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			fields[i].Value = value
 		}
 	}
-	spec := ui.FormSpec{Title: op + " job · " + host + " / " + source, Fields: fields, Mouse: c.Mouse, Theme: c.Theme, Build: build, Apply: apply, TextEditor: editor, ScheduleContext: contextFor, LoadKeys: []string{"host", "source", "runner", "preset", "script", "project", "directory", "runtime", "output", "stderr"}}
+	spec := ui.FormSpec{Title: op + " job · " + host + " / " + source, Popup: true, Fields: fields, Mouse: c.Mouse, Theme: c.Theme, Build: build, Apply: apply, TextEditor: editor, ScheduleContext: contextFor, LoadKeys: []string{"host", "source", "runner", "preset", "script", "project", "directory", "runtime", "output", "stderr"}}
 	spec.Load = func(ctx context.Context, v map[string]string) []ui.FieldUpdate {
 		h := chosenHost(v)
 		srcID := chosenSource(v)

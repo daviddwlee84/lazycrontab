@@ -39,6 +39,9 @@ Background effects return messages; UI state belongs to the model. Check late
 results against target/generation and model ownership. Nested help completion
 must not close its containing workflow. Let typing/paste own printable keys.
 Render and mouse hit regions share layout; overlays consume mouse events.
+Add/Edit job drafts use an opt-in embedded popup, including their nested editors
+and pickers. Explicit Alt view switching suspends/resumes unsaved drafts; outside
+mouse events never reach the dashboard. Standalone wizard layout is unchanged.
 Review/apply/result forms are modal popups over the dashboard. Structured review
 diffs use the built-in renderer; human receipts must preserve unknown/partial
 outcomes, while JSON output keeps its structured data contract.

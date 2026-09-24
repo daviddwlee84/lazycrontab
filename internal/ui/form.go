@@ -75,6 +75,7 @@ type FormSpec struct {
 	LoadKeys        []string
 	ScheduleContext func(map[string]string) ScheduleEditorOptions
 	TextEditor      func(string) *exec.Cmd
+	Popup           bool
 }
 type FormResult struct {
 	Values    map[string]string
@@ -106,6 +107,7 @@ type Form struct {
 	cancel                       context.CancelFunc
 	inputs                       []textinput.Model
 	focus, width, height, scroll int
+	canvasWidth, canvasHeight    int
 	advanced                     bool
 	stage                        string
 	review                       Review
@@ -117,6 +119,7 @@ type Form struct {
 	loadCancel                   context.CancelFunc
 	loadValues                   map[string]string
 	embedded, dark               bool
+	popupHost                    bool
 	live                         string
 	liveGeneration               int
 	schedule                     *ScheduleEditor
@@ -139,7 +142,10 @@ type formLive struct {
 
 var formSequence atomic.Int64
 
-func (f *Form) SetEmbedded(value bool) { f.embedded = value }
+func (f *Form) SetEmbedded(value bool) {
+	f.embedded = value
+	f.resizeForm(f.canvasWidth, f.canvasHeight)
+}
 func (f *Form) SetMouse(value bool) {
 	f.spec.Mouse = value
 	if f.schedule != nil {
@@ -169,7 +175,7 @@ func (f *Form) Result() (FormResult, error) { return f.result, f.err }
 
 func NewForm(ctx context.Context, spec FormSpec) *Form {
 	child, cancel := context.WithCancel(ctx)
-	f := &Form{spec: spec, ctx: child, cancel: cancel, width: 80, height: 24, stage: "edit", dark: spec.Theme != "light"}
+	f := &Form{spec: spec, ctx: child, cancel: cancel, width: 80, height: 24, canvasWidth: 80, canvasHeight: 24, stage: "edit", dark: spec.Theme != "light"}
 	for _, field := range spec.Fields {
 		input := textinput.New()
 		if field.Kind == "multiline" {
@@ -400,25 +406,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return f, nil
 	case tea.WindowSizeMsg:
-		if f.picker != nil {
-			f.picker.press = ""
-			f.picker.query.SetWidth(max(1, m.Width-6))
-		}
-		f.width = max(1, m.Width)
-		f.height = max(1, m.Height)
-		f.mousePress = ""
-		for i := range f.inputs {
-			f.inputs[i].SetWidth(max(1, f.width-8))
-		}
-		if f.schedule != nil {
-			f.schedule.SetSize(f.width, f.height)
-		}
-		if f.help != nil {
-			f.help.Update(m)
-		}
-		if f.multiline != nil {
-			f.resizeMultiline()
-		}
+		f.resizeForm(m.Width, m.Height)
 		return f, nil
 	case formBuilt:
 		if m.owner != f || f.stage != "building" || f.finished {
@@ -774,6 +762,9 @@ func clip(s string, width int) string { return ansi.Truncate(s, max(1, width), "
 func (f *Form) buttons() [][2]string {
 	switch f.stage {
 	case "edit":
+		if f.DraftPopupActive() && f.width < 48 {
+			return [][2]string{{"review", "Review ^S"}, {"advanced", "More ^O"}, {"cancel", "Esc"}}
+		}
 		return [][2]string{{"review", "Review ^S"}, {"advanced", "Advanced ^O"}, {"cancel", "Cancel Esc"}}
 	case "review":
 		return [][2]string{{"apply", "Apply ^S"}, {"back", "Back Esc"}, {"cancel", "Cancel"}}
@@ -784,7 +775,7 @@ func (f *Form) buttons() [][2]string {
 	}
 }
 func (f *Form) hits() []hitRegion {
-	if f.Modal() {
+	if f.reviewModal() {
 		return f.modalLayout().hits
 	}
 	if f.height < 6 {
@@ -840,7 +831,7 @@ func (f *Form) View() tea.View {
 	if f.multiline != nil {
 		return f.multilineView()
 	}
-	if f.Modal() {
+	if f.reviewModal() {
 		v := tea.NewView(f.modalView())
 		v.AltScreen = true
 		if f.spec.Mouse {
@@ -918,6 +909,17 @@ func (f *Form) View() tea.View {
 		status = t.Muted.Render("Review target and changes. Enter does not apply.")
 	} else if f.stage == "edit" {
 		status = t.Muted.Render("Draft only · Ctrl+S reviews before saving")
+		if f.DraftPopupActive() {
+			visible := f.visible()
+			position := 0
+			for i, field := range visible {
+				if field == f.focus {
+					position = i + 1
+					break
+				}
+			}
+			status = t.Muted.Render(fmt.Sprintf("Draft only · field %d/%d · ^S review", position, len(visible)))
+		}
 	}
 	lines = append(lines, clip(status, f.width), "")
 	buttons := []string{}

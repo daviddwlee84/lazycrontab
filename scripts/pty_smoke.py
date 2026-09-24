@@ -202,7 +202,9 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             session.expect("12 9 * * 1-5",mark)
             before=cron.read_text()
             mark=session.mark();session.send(b"\x1b")
+            session.pump(0.2);session.resize(121,32)
             session.expect("12 9 * * 1-5",mark)
+            session.resize(120,32);session.pump(0.2)
             assert cron.read_text()==before,"Playground draft cancellation changed cron"
             # The header tabs are actual mouse targets, including while editing.
             mark=session.mark();session.click(17,0)
@@ -220,7 +222,7 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             session.expect("add job",mark)
             session.expect("PTY backup",mark)
             # Click Review, Back and Apply through shared semantic buttons.
-            mark=session.mark();session.click(5,30)
+            mark=session.mark();session.click(10,28)
             session.expect("proposed",mark)
             before=cron.read_text()
             session.send(b"\r")
@@ -230,7 +232,7 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             # dashboard header; Back/Apply/Close live inside that panel.
             session.click(10,28)
             session.pump()
-            mark=session.mark();session.click(5,30)
+            mark=session.mark();session.click(10,28)
             session.expect("proposed",mark)
             mark=session.mark();session.click(24,28)
             session.expect("Saved",mark)

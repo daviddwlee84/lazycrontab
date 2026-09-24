@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show Add/Edit job drafts and their nested editors in dashboard popups while retaining unsaved drafts across explicit view switches.
+
 - Keep review/save results in dashboard popups with highlighted diffs, clear job status changes and human-readable receipts.
 - Simplify native Pueue task payloads and use its working-directory option without a duplicate `cd`.
 

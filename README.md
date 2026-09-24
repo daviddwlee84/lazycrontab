@@ -56,7 +56,13 @@ Effective bindings drive both help and dispatch. Printable characters belong to 
 
 Forms use Tab/Shift+Tab, arrows or clickable controls for choices, `Ctrl+P`/Browse for target paths and `Ctrl+O` for advanced settings. Enter on Schedule opens the shared cron editor; F1 opens contextual concepts and returns to the same draft. `Ctrl+S` prepares a review; **`y` or another Ctrl+S applies, Enter does not approve**. Esc returns to the draft or cancels a standalone confirmation. Results remain visible until acknowledged. Job/source forms and host selection stay inside the dashboard; external editors and native SSH temporarily take terminal ownership.
 
-Review and save results open in a centered popup with the dashboard still visible.
+Add/Edit job forms open in a centered popup with the dashboard still visible.
+Fields scroll with focus; schedule editing, path browsing, help and managed-script
+content stay in the same popup and return to the current draft. Outside clicks
+stay within the popup. `Alt+1/2/3` still lets you suspend and resume an unsaved
+draft across views. Standalone CLI wizards retain their full terminal layout.
+
+Review and save results also use a centered popup.
 Enable/disable first shows the job and status transition, followed by the exact
 crontab diff. Added/removed lines and changed portions are highlighted; long lines
 wrap and can be scrolled with arrows/j/k, PgUp/PgDn or the mouse wheel. This renderer

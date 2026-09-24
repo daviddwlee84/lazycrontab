@@ -24,9 +24,13 @@ type reviewPresentationKey struct {
 	dark, stopping                         bool
 }
 
-// Modal marks states that own the entire input surface while remaining above
-// the dashboard. Editing fields still uses the full workflow surface.
+// Modal marks states that own keyboard and mouse above the dashboard. Explicit
+// Alt view switching remains available for opted-in draft popups only.
 func (f *Form) Modal() bool {
+	return f.reviewModal() || f.DraftPopupActive()
+}
+
+func (f *Form) reviewModal() bool {
 	return f.initialReview || f.stage == "review" || f.stage == "building" || f.stage == "applying" || f.stage == "result"
 }
 
@@ -42,18 +46,19 @@ func (f *Form) modalButtons() [][2]string {
 }
 
 func (f *Form) modalLayout() reviewLayout {
+	width, height := f.canvasSize()
 	margin := 0
-	if f.width >= 60 {
+	if width >= 60 {
 		margin = 4
-	} else if f.width >= 16 {
+	} else if width >= 16 {
 		margin = 1
 	}
-	w := min(108, max(1, f.width-margin*2))
-	h := min(28, max(1, f.height-4))
-	if f.height < 10 {
-		h = f.height
+	w := min(108, max(1, width-margin*2))
+	h := min(28, max(1, height-4))
+	if height < 10 {
+		h = height
 	}
-	l := reviewLayout{box: rect{(f.width - w) / 2, (f.height - h) / 2, w, h}}
+	l := reviewLayout{box: rect{(width - w) / 2, (height - h) / 2, w, h}}
 	l.body = rect{l.box.x + 2, l.box.y + 2, max(1, w-4), max(1, h-5)}
 	if h < 6 || w < 8 {
 		l.body = l.box
@@ -168,7 +173,8 @@ func (f *Form) reviewScrollKey(key string) {
 
 func (f *Form) modalView() string {
 	l := f.modalLayout()
-	return overlayText("", f.modalPanel(), l.box.x, l.box.y, f.width, f.height)
+	width, height := f.canvasSize()
+	return overlayText("", f.modalPanel(), l.box.x, l.box.y, width, height)
 }
 
 func (f *Form) modalPanel() string {

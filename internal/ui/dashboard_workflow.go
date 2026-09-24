@@ -61,22 +61,36 @@ func (m *dashboard) openWorkflow(action, expression string) tea.Cmd {
 }
 func (m *dashboard) childInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	msg = offsetMouse(msg, -2)
+	if form, ok := m.child.(*Form); ok {
+		var forward bool
+		msg, forward = form.popupInput(msg)
+		if !forward {
+			return m, nil
+		}
+	}
 	var cmd tea.Cmd
 	m.child, cmd = m.child.Update(msg)
 	return m, cmd
 }
 func offsetMouse(msg tea.Msg, dy int) tea.Msg {
+	return offsetMouseXY(msg, 0, dy)
+}
+func offsetMouseXY(msg tea.Msg, dx, dy int) tea.Msg {
 	switch v := msg.(type) {
 	case tea.MouseClickMsg:
+		v.X += dx
 		v.Y += dy
 		return v
 	case tea.MouseReleaseMsg:
+		v.X += dx
 		v.Y += dy
 		return v
 	case tea.MouseWheelMsg:
+		v.X += dx
 		v.Y += dy
 		return v
 	case tea.MouseMotionMsg:
+		v.X += dx
 		v.Y += dy
 		return v
 	}
@@ -87,6 +101,13 @@ func offsetMouse(msg tea.Msg, dy int) tea.Msg {
 // the focused workflow owns keyboard, paste and mouse input.
 func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
 	if form, ok := m.child.(*Form); ok && m.childShowing() && form.Modal() {
+		if key, ok := msg.(tea.KeyPressMsg); ok && form.DraftPopupActive() {
+			if view := map[string]string{"alt+1": "jobs", "alt+2": "week", "alt+3": "playground"}[key.String()]; view != "" {
+				m.mousePress = ""
+				form.clearPopupPress()
+				return true, m.act(view)
+			}
+		}
 		switch msg.(type) {
 		case tea.KeyPressMsg, tea.PasteMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
 			m.mousePress = ""
@@ -133,6 +154,9 @@ func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.child = embedded(v.model)
+		if form, ok := m.child.(*Form); ok {
+			form.SetPopupHost(true)
+		}
 		if mouse, ok := m.child.(interface{ SetMouse(bool) }); ok {
 			mouse.SetMouse(m.mouse)
 		}

@@ -110,7 +110,7 @@ echo 'FIXTURE EDITOR HANDOFF'
         def leave_content(session):
             mark = session.mark()
             session.send(b"\x13")
-            session.expect("Ctrl+S reviews before saving", mark)
+            session.expect("Draft only", mark)
 
         def review(session):
             mark = session.mark()
@@ -184,6 +184,7 @@ echo 'FIXTURE EDITOR HANDOFF'
             session.pump(0.2)
             mark = session.mark()
             session.send(b"\x1b")
+            session.pump(0.2); session.resize(121, 40)
             session.expect("Managed PTY", mark)
             session.close()
         assert cron.read_bytes() == before_cron and scripts() == before_scripts, "cancelled nested editor saved changes"
