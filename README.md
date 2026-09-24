@@ -6,18 +6,18 @@ Linux and macOS are supported. Remote hosts use their existing `crontab` and POS
 
 ## Install and run
 
-Requires Go **1.26.6+**. The first source release is **v0.1.0**. Versioned
-installation requires the repository and tag to be published on GitHub:
+Requires Go **1.26.6+**. Source version **v0.1.1** uses versioned Go installation.
+The matching tag must be published on GitHub before installing it:
 
 ```sh
-go install github.com/daviddwlee84/lazycrontab@v0.1.0
+go install github.com/daviddwlee84/lazycrontab@v0.1.1
 lazycrontab --version
 ```
 
 For subsequent source releases, `go install github.com/daviddwlee84/lazycrontab@latest`
 selects the latest published release tag, not necessarily the latest main-branch
 commit. Install locations follow `GOBIN`, or `GOPATH/bin`; ensure that directory
-is on PATH (`go env GOBIN GOPATH`). v0.1.0 uses versioned Go source installation.
+is on PATH (`go env GOBIN GOPATH`). Releases currently use Go source installation.
 
 To build a local checkout instead:
 
@@ -258,15 +258,77 @@ require a wrapper to retain their semantics; unresolved `~/` directories retain
 target-side expansion. Existing stored commands are preserved when toggling or
 running a job. Pueue owns the [task working directory and shell invocation](https://github.com/Nukesor/pueue/blob/v4.0.2/pueue/src/daemon/process_handler/spawn.rs).
 
-Output preserves existing behavior by default. `--output PATH` appends stdout/stderr together; `--stderr PATH` separates stderr. Parent directories must exist. Pueue uses its own capture by default. Review shows the generated shell command and required cron percent escaping.
-
-For Pueue, empty output/error/log file fields stay in place but are disabled, with a note pointing to `pueue log` or lazypueue. Existing explicit paths remain editable; clearing a focused path leaves it editable until you move away. Switching runners never silently clears values. Explicit redirects apply to the queued task, so redirected output goes to those files instead of Pueue's capture. The task ID and errors from cron invoking `pueue add` remain separate from the task's output.
-
 Scripts use explicit paths, private editing copies, diffs, conflict checks, backups and permission-preserving replacement. Arbitrary command strings are not searched heuristically for a script filename.
 
 System-cron manual runs use the displayed cron-like target environment. Supercronic manual runs inherit the selected host's noninteractive environment plus file assignments; an existing container process's environment/cwd cannot be recovered from the file. Neither mode claims exact daemon/PAM reproduction. Local cancellation terminates owned process groups; SSH interruption can leave the remote result unknown.
 
 Only observed manual runs are recorded. Logs come from those records or explicit files, with bounded output. Native cron history stays unknown without an external observer.
+
+## Output, logs and cron mail
+
+Advanced **Task output**, or `--output-policy`, controls the task's streams:
+
+| Policy | Direct job | Pueue task |
+| --- | --- | --- |
+| `inherit` (default) | Native cron receives output; Supercronic logs it | Pueue captures output |
+| `files` | Append to selected files | Append to selected files instead of Pueue capture |
+| `stderr-only` | Discard stdout; retain stderr | Pueue captures stderr only |
+| `discard` | Discard both task streams | Discard both task streams; retain task status |
+
+For `files`, `--output PATH` appends stdout and stderr together; `--stderr PATH`
+separates stderr. Using only `--stderr` leaves stdout with its normal destination.
+At least one path is required. Existing file flags without `--output-policy`
+continue to select file output; clearing the last path through those CLI flags
+returns to `inherit`. In the form, choose **Inherit** to stop redirecting. Paths
+belong to the selected host; parent directories must exist. You manage rotation
+and cleanup. `--log PATH` only selects a file to inspect.
+
+The file fields stay in the same place when disabled by another policy. Changing
+choices retains their draft values; only active settings affect the saved job.
+`stderr-only` means a stream, not failures only: successful programs can write
+warnings to stderr, and failures can be silent. Review shows the output choices
+alongside the exact command and cron percent escaping.
+
+Pueue task output is separate from the notices printed by `pueue add` when cron
+submits a task. Advanced **Enqueue notices**, or `--enqueue-output`, has two values:
+`quiet` discards only that add command's stdout; `inherit` leaves it untouched.
+Both retain stderr and the exit status. New Pueue jobs and direct-to-Pueue changes
+default to `quiet`, avoiding routine task-ID mail. Existing Pueue jobs keep their
+stored behavior until a change is explicitly reviewed. Stderr warnings can still
+produce mail, even after a successful enqueue.
+[Pueue's add command](https://github.com/Nukesor/pueue/blob/v4.0.2/pueue/src/client/commands/add.rs)
+reports submission separately from the task's eventual execution.
+
+Manual Run can show the task ID using a generated job's still-valid saved recipe;
+missing or changed recipes retain the exact stored command. A successful enqueue
+means queued, not completed. Use `pueue log TASK_ID` or lazypueue to inspect the
+task. Even `--output-policy discard` does not hide enqueue stderr.
+
+```sh
+lazycrontab add --when 'every minute' --command 'echo "hi"' \
+  --runner pueue --dry-run
+lazycrontab edit JOB_ID --enqueue-output quiet --dry-run
+lazycrontab edit JOB_ID --output-policy stderr-only --dry-run
+lazycrontab edit JOB_ID --output-policy files \
+  --output /srv/logs/job.log --stderr /srv/logs/job.err --dry-run
+lazycrontab help output-and-mail
+```
+
+Native cron can mail captured output. `MAILTO` unset normally uses the crontab
+owner; `MAILTO=""` suppresses mail, and a nonempty value chooses a recipient.
+Assignments apply to following jobs until replaced. A nonzero exit alone does
+not guarantee mail. Delivery depends on the host's mail service; review reports
+the setting without claiming that delivery works.
+[crontab mail settings](https://man7.org/linux/man-pages/man5/crontab.5.html)
+
+Use `V` or `sources edit-raw` to change `MAILTO` with a whole-source review.
+Putting it at the top affects all following jobs. Per-job **Variables** such as
+`--env 'MAILTO='` do not configure cron's own mail handling. A shell's “You have
+new mail” notice can refer to local cron mail; it is separate from macOS Mail.
+lazycrontab does not clear mailboxes or change shell/mail-service configuration.
+Supercronic uses its daemon/container logs for output and status; changing task
+streams does not remove its own scheduler logs.
+[Supercronic logging](https://github.com/aptible/supercronic#why-supercronic)
 
 ## Configuration and storage
 
@@ -313,6 +375,7 @@ Completion includes command-specific arguments, not just command names and flags
 | `lazycrontab edit ` / `show ` / `run ` | Recently observed job IDs for the selected host/source |
 | `lazycrontab backup restore ` | Existing local backup IDs |
 | `lazycrontab add --runner ` / `--preset ` | Supported values |
+| `lazycrontab add --output-policy ` / `--enqueue-output ` | Supported output and enqueue policies |
 
 `sources edit ID` edits registration settings. `sources edit-raw` edits the
 document selected through `--host`/`--source` and takes no positional ID.

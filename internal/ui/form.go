@@ -656,6 +656,8 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					topic = "cron-fields"
 				case "environment", "runner":
 					topic = "execution-environment"
+				case "output_policy", "enqueue_output", "output", "stderr", "log":
+					topic = "output-and-mail"
 				case "project":
 					topic = "uv"
 				}

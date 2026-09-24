@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## v0.1.1 — 2026-09-24
+
+- Choose per-job task output with `--output-policy` or Advanced: inherit the
+  runner's handling, append to files, keep stderr only, or discard both streams.
+  Output file fields keep their place and retain inactive draft values.
+- Default new Pueue jobs to quiet enqueue notices, retaining enqueue stderr and
+  manual Run task-ID feedback. Existing Pueue jobs keep their stored behavior
+  unless a notice-policy change is explicitly reviewed.
+- Explain task output, enqueue notices and applicable cron `MAILTO` settings in
+  review and shared offline `output-and-mail` help. Mailbox and host mail-service
+  configuration remain under user control.
+- Keep native cron percent-separated stdin in a single physical crontab line,
+  preserving literal backslashes, percent characters and trailing comments.
+- Preserve managed-script content when opening an interactive edit with enqueue
+  settings, and retain pinned commands when only log or notice settings change.
+- Keep manual Run on the exact native command when helper metadata cannot be
+  verified, reporting unavailable Pueue task IDs instead of inferring them.
+- Make terminal acceptance checks observe completed zsh initialization and actual
+  screen cells; run Linux and macOS CI tests independently.
+
 ## v0.1.0 — 2026-09-24
 
 Initial source release for Linux and macOS; requires Go 1.26.6 or newer.

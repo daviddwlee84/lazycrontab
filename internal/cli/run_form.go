@@ -2,13 +2,14 @@ package cli
 
 import (
 	"context"
+	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/daviddwlee84/lazycrontab/internal/service"
 	"github.com/daviddwlee84/lazycrontab/internal/ui"
 )
 
-func runFormSpec(s *service.Service, snap service.Snapshot, j service.Entry, recipe service.Recipe, forceOverride bool) ui.FormSpec {
+func runFormSpec(s *service.Service, snap service.Snapshot, j service.Entry, recipe service.Recipe, forceOverride bool, metadataErrors ...error) ui.FormSpec {
 	return ui.FormSpec{Title: "Run · " + j.Key(), Theme: s.Config.Theme, Mouse: s.Config.Mouse,
 		Fields: []ui.Field{{Key: "runner", Label: "Execute via", Value: recipe.Runner, Options: []string{"direct", "pueue"}}, {Key: "group", Label: "Existing Pueue group (empty=default)", Value: recipe.Group, DisabledWhen: pueueGroupDisabled}},
 		Build: func(ctx context.Context, v map[string]string) (ui.Review, error) {
@@ -17,6 +18,9 @@ func runFormSpec(s *service.Service, snap service.Snapshot, j service.Entry, rec
 			r.Group = v["group"]
 			var override *service.Recipe
 			if forceOverride || r.Runner != recipe.Runner || r.Runner == "pueue" && r.Group != recipe.Group {
+				if len(metadataErrors) > 0 && metadataErrors[0] != nil {
+					return ui.Review{}, fmt.Errorf("cannot override an unverified recipe: %w; rebuild the job explicitly before changing its runner", metadataErrors[0])
+				}
 				if r.Runner != "pueue" {
 					r.Group = ""
 				}
@@ -48,12 +52,12 @@ func newRunModel(ctx context.Context, s *service.Service, host, source, id strin
 	}
 	recipe, err := service.LoadRecipe(j)
 	if err != nil {
-		return nil, err
+		recipe = service.Recipe{Runner: "direct", Original: j.Command}
 	}
 	if recipe.Runner == "" {
 		recipe.Runner = "direct"
 	}
-	return ui.NewForm(ctx, runFormSpec(s, snap, j, recipe, false)), nil
+	return ui.NewForm(ctx, runFormSpec(s, snap, j, recipe, false, err)), nil
 }
 
 func newChangeModel(ctx context.Context, s *service.Service, r ui.WorkflowRequest) (tea.Model, error) {

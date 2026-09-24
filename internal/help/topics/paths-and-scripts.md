@@ -35,9 +35,14 @@ shell profiles. Missing and unverified dependencies remain visible findings.
 You can fix a finding, keep the draft, or save the job disabled for later.
 Run now is a separate explicit action that really executes the job.
 
-Advanced output settings append stdout/stderr to chosen files. Check their
-parent directories and permissions. Pueue is optional: choosing it enqueues the
-command when cron triggers; actual execution may wait in the queue.
+Advanced Task output chooses normal runner handling, append-to-file output,
+stderr only or discarded output. For files, check parent directories and
+permissions. Pueue captures task output by default. Its separate Enqueue notices
+choice hides routine task-ID output for new jobs while preserving diagnostics.
+Choosing Pueue enqueues the command when cron triggers; actual execution may
+wait in the queue. See output-and-mail for file paths and cron mail settings.
 
 Raw shell commands remain available. Existing --script metadata does not
 silently replace a command with a generated script preset.
+
+See also: execution-environment, output-and-mail, uv

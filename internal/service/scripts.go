@@ -284,7 +284,11 @@ func (s *Service) ResolveScriptRecipe(ctx context.Context, e Entry, r Recipe) (R
 			r.Directory = task.Project
 		}
 	}
-	for _, value := range []*string{&r.Output, &r.Stderr, &r.Log} {
+	paths := []*string{&r.Log}
+	if EffectiveOutputPolicy(r) == OutputFiles {
+		paths = append(paths, &r.Output, &r.Stderr)
+	}
+	for _, value := range paths {
 		*value, err = resolveTargetPath(*value, r.Directory, home)
 		if err != nil {
 			return r, err

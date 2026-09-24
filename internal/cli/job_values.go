@@ -1,6 +1,10 @@
 package cli
 
-import "maps"
+import (
+	"maps"
+
+	"github.com/daviddwlee84/lazycrontab/internal/service"
+)
 
 // effectiveJobValues projects a retained wizard draft into one execution type.
 // Hidden values stay in the original map so switching back restores the draft;
@@ -41,17 +45,30 @@ func effectiveJobValues(draft map[string]string, commandScript string) map[strin
 	}
 	if v["runner"] != "pueue" {
 		v["group"] = ""
+		v["enqueue_output"] = ""
+	}
+	if v["output_policy"] == "" {
+		v["output_policy"] = service.EffectiveOutputPolicy(service.Recipe{Output: v["output"], Stderr: v["stderr"]})
+	}
+	if v["output_policy"] != "files" {
+		clear("output", "stderr")
 	}
 	return v
 }
 
 func sameExecutionValues(a, b map[string]string) bool {
-	for _, key := range []string{"command", "runner", "group", "directory", "output", "stderr", "script", "log", "preset", "runtime", "project", "args", "environment", "script_content"} {
+	for _, key := range []string{"command", "runner", "group", "directory", "output_policy", "enqueue_output", "output", "stderr", "script", "preset", "runtime", "project", "args", "environment", "script_content"} {
 		if a[key] != b[key] {
 			return false
 		}
 	}
 	return true
+}
+
+func sameExecutionExceptEnqueue(a, b map[string]string) bool {
+	a = maps.Clone(a)
+	a["enqueue_output"] = b["enqueue_output"]
+	return sameExecutionValues(a, b)
 }
 
 func pueueGroupDisabled(values map[string]string) string {
@@ -61,11 +78,16 @@ func pueueGroupDisabled(values map[string]string) string {
 	return ""
 }
 
-func pueuePathDisabled(key string) func(map[string]string) string {
-	return func(values map[string]string) string {
-		if values["runner"] == "pueue" && values[key] == "" {
-			return pueueOutputHint
-		}
-		return ""
+func pueueEnqueueDisabled(values map[string]string) string {
+	if values["runner"] != "pueue" {
+		return "Select Pueue to configure its submission notices."
 	}
+	return ""
+}
+
+func outputPathDisabled(values map[string]string) string {
+	if values["output_policy"] != "files" {
+		return "Choose Files in Task output to append to explicit paths."
+	}
+	return ""
 }

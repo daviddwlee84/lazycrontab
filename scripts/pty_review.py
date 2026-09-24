@@ -146,7 +146,12 @@ def check_add_popup(binary):
             session.send("popup remark")
             mark = session.mark(); session.send(b"\x0f")
             session.expect("directly or enqueue", mark)
-            for label in ("Variables", "Append output", "Separate error", "Existing log", "Host"):
+            for label in ("Variables", "Task output"):
+                next_field(label)
+            session.send(b"\x1b[C")  # File policy makes both path fields editable.
+            next_field("Append output")
+            session.send(str(root / "draft.log"))
+            for label in ("Separate error", "Existing log", "Host"):
                 next_field(label)
             mark = session.mark(); session.wheel(20, 6)
             session.expect("Source", mark)
@@ -214,7 +219,7 @@ def check_advanced_and_mouse(binary):
             mark = session.mark(); session.send(b"\x0f")
             session.expect("Run directly or enqueue", mark)
             session.expect("Existing log to inspect", mark)
-            session.expect("/18", mark)
+            session.expect("/20", mark)
             session.send("\tSAMPLE=kept")
             session.pump(0.2)
             mark = session.mark(); session.send(b"\x0f")
@@ -229,7 +234,7 @@ def check_advanced_and_mouse(binary):
             session.resize(40, 12); session.pump(0.2)
             mark = session.mark(); session.send(b"\x0f")
             session.expect("directly or enqueue", mark)
-            session.expect("/18", mark)
+            session.expect("/20", mark)
             mark = session.mark(); session.send(b"\t")
             session.expect("SAMPLE=kept", mark)
             session.send(b"\x1b"); session.pump(0.2)

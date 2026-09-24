@@ -212,7 +212,7 @@ func TestCommandAndManagedPueueReviewsDoNotSubmit(t *testing.T) {
 	for _, task := range [][]string{{"--command", `echo "hi"`}, {"--script-content", "echo hi\nprintf 'done\\n'\n"}} {
 		args := append([]string{"add", "--schedule", "* * * * *", "--runner", "pueue", "--group", "default", "--dry-run"}, task...)
 		out, err := invoke(args...)
-		if err != nil || !strings.Contains(out, "Output: captured by Pueue") || strings.Contains(out, "script is not ready") {
+		if err != nil || !strings.Contains(out, "Task output: stdout and stderr inherited by Pueue task logs") || !strings.Contains(out, "Enqueue notices: submission stdout suppressed") || strings.Contains(out, "script is not ready") {
 			t.Fatal(out, err)
 		}
 	}

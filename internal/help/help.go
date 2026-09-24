@@ -15,6 +15,7 @@ func Topics() []Topic {
 	definitions := [][3]string{
 		{"cron-fields", "Reading cron fields", "Minutes, hours, dates, weekdays, steps and dialects"},
 		{"execution-environment", "The cron execution environment", "Why a command works in your terminal but fails in cron"},
+		{"output-and-mail", "Output and cron mail", "Choose task output, Pueue notices and cron mail settings"},
 		{"paths-and-scripts", "Paths and script presets", "Working directories, interpreters, arguments and checks"},
 		{"uv", "Python projects and uv", "Choose a project, standalone script or existing virtualenv"},
 		{"ssh", "SSH hosts and sources", "Use existing aliases, choose your fleet and authenticate"},

@@ -122,6 +122,36 @@ automatically sourced. `.zshrc` is for interactive zsh; choosing zsh or a login
 shell does not reproduce an interactive terminal. See the [zsh startup-file
 documentation](https://zsh.sourceforge.io/Doc/Release/Files.html).
 
+## Output and enqueue notices
+
+Advanced **Task output** defaults to `inherit`: direct jobs keep the selected
+scheduler's output handling, while Pueue captures queued-task output. Choose
+`files` to append to paths you manage, `stderr-only` to discard stdout, or
+`discard` to discard both task streams. CLI: `--output-policy`. File fields keep
+their position and draft values when disabled by another policy.
+
+`--output PATH` combines stdout/stderr, with `--stderr PATH` for a separate
+stderr file. Using only `--stderr` preserves stdout's normal destination. These
+flags still select `files` when no policy is supplied; that policy needs at
+least one path. The chosen host must have writable parent directories. There is
+no automatic log rotation. `--log` selects a file to inspect and does not
+redirect output.
+
+Pueue's **Enqueue notices** (`--enqueue-output`) is separate: `quiet` hides only
+the stdout of `pueue add`, retaining diagnostics on stderr and the exit status.
+New Pueue jobs and direct-to-Pueue conversions default to `quiet`; existing
+Pueue jobs retain their stored behavior until a change is reviewed. Task output
+policies do not suppress enqueue failures. Manual Run retains task-ID feedback
+when its saved helper recipe matches the installed command. Use `pueue log`
+or lazypueue for the task result; being queued does not mean it completed.
+
+Native cron may mail captured output, including successful commands and stderr
+warnings. `stderr-only` is not a failures-only filter. Configure cron's `MAILTO`
+through `V` or `sources edit-raw`, then review which following jobs the assignment
+affects. Per-job `--env 'MAILTO='` does not change that setting. Supercronic uses
+its own logs. See [output, logs and cron mail](../README.md#output-logs-and-cron-mail)
+or run `lazycrontab help output-and-mail` for the full behavior.
+
 ## CLI examples
 
 Flags expose the same choices as the form:
@@ -156,6 +186,12 @@ lazycrontab check JOB_ID
 lazycrontab check JOB_ID --json
 
 lazycrontab edit JOB_ID --script-content-file ./revised.sh --dry-run
+
+# Review changing an existing Pueue job's submission notices.
+lazycrontab edit JOB_ID --enqueue-output quiet --dry-run
+
+# Keep task stderr with its runner; successful warnings can still appear.
+lazycrontab edit JOB_ID --output-policy stderr-only --dry-run
 ```
 
 Every minute is `* * * * *`; `@minutes` is not a supported cron macro. The

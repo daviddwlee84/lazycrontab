@@ -151,14 +151,14 @@ def main():
                 basic_box = form.read().box
                 session.send(b"\x0f")
                 runner_y = form.expect_focus("Run directly or enqueue")
-                form.wait_for("expanded row count", lambda: "/18" in "\n".join(form.inside))
+                form.wait_for("expanded row count", lambda: "/20" in "\n".join(form.inside))
                 direct_box = form.box
                 assert direct_box[:3] == basic_box[:3], "Advanced changed the popup top/width instead of growing downward"
                 if cols == 120:
-                    assert "18/18" in "\n".join(form.inside), "expanded reserved rows were not all visible"
+                    assert "20/20" in "\n".join(form.inside), "expanded reserved rows were not all visible"
                 assert "direct" in form.value("Run directly or enqueue")[0]
                 session.send(b"\x1b[B")
-                form.expect_focus("Variables")  # Skip disabled direct-mode group.
+                form.expect_focus("Variables")  # Skip Pueue group and enqueue notices.
                 session.send(b"\x1b[A")
                 runner_y = form.expect_focus("Run directly or enqueue")
                 assert "direct" in form.value("Run directly or enqueue")[0]
@@ -178,13 +178,42 @@ def main():
                 session.send(b"\x1b[C")
                 form.wait_value("Run directly or enqueue", "◀ pueue")
                 session.send(b"\x1b[B\x1b[B")
+                form.expect_focus("Enqueue notices")
+                session.send(b"\x1b[B")
                 form.expect_focus("Variables")
                 if cols == 120:
                     _, output_y = form.value("Append output")
                     session.click(form.box[0] + 7, output_y + 1)
                     form.expect_focus("Variables")
                 session.send(b"\x1b[B")
-                form.expect_focus("Host")  # Empty Pueue output/stderr/log skip.
+                policy_y = form.expect_focus("Task output")
+                policy_box = form.box
+                session.send(b"\x1b[C")  # File routing enables empty path inputs.
+                assert form.expect_focus("Task output") == policy_y
+                assert form.box == policy_box, "output policy moved/resized the popup"
+                session.send(b"\x1b[B")
+                form.expect_focus("Append output")
+                draft_output = "~/kept.log"  # Fits the narrow input viewport.
+                session.send(draft_output)
+                session.send(b"\x1b[B")
+                form.expect_focus("Separate error")
+                session.send(b"\x1b[A\x1b[A\x1b[D")
+                form.expect_focus("Task output")
+                session.send(b"\x1b[B")
+                form.expect_focus("Existing log")  # Inherit skips both redirect paths.
+                session.send(b"\x1b[A\x1b[C\x1b[B")
+                form.expect_focus("Append output")
+                form.wait_value("Append output", draft_output)
+                # Choosing each discard policy keeps file paths as an inactive
+                # draft and does not move the focused selector.
+                session.send(b"\x1b[A\x1b[C")
+                policy_y = form.expect_focus("Task output")
+                session.send(b"\x1b[C")
+                assert form.expect_focus("Task output") == policy_y
+                session.send(b"\x1b[B")
+                form.expect_focus("Existing log")
+                session.send(b"\x1b[B")
+                form.expect_focus("Host")
                 session.send(b"\x1b"); session.pump(0.2); session.close()
             assert cron.read_bytes() == before and not Path(env["FIXTURE_WRITES"]).exists()
             assert not Path(env["FIXTURE_PUEUE_SUBMISSION"]).exists()
@@ -202,7 +231,7 @@ def main():
             session.send("e"); session.expect("edit job")
             session.send(b"\x0f")
             form.expect_focus("Run directly or enqueue")
-            session.send(b"\x1b[B\x1b[B\x1b[B")
+            session.send(b"\x1b[B" * 5)
             form.expect_focus("Append output")
             session.send(b"\x01\x0b")
             form.expect_focus("Append output")
@@ -211,9 +240,21 @@ def main():
             form.expect_focus("Append output")
             form.wait_value("Append output", new_output)
             session.send(b"\x01\x0b\x1b[B")
-            form.expect_focus("Name")
+            form.expect_focus("Separate error")
             session.send(b"\x1b[A")
-            form.expect_focus("Variables")  # Empty path becomes disabled on blur.
+            form.expect_focus("Append output")  # File policy keeps empty paths editable.
+            session.send(new_output)
+            session.send(b"\x1b[A\x1b[D\x1b[B")
+            form.expect_focus("Existing log")
+            session.send(b"\x1b[A\x1b[C\x1b[B")
+            form.expect_focus("Append output")
+            form.wait_value("Append output", new_output)
+            mark = session.mark(); session.send(b"\x1bOP")
+            session.expect("Output and cron mail", mark)
+            mark = session.mark(); session.send(b"\x1b")
+            session.expect("edit job", mark)
+            form.expect_focus("Append output")
+            form.wait_value("Append output", new_output)
             session.send(b"\x1b"); session.pump(0.2); session.close()
         assert cron.read_bytes() == before and not Path(env["FIXTURE_PUEUE_SUBMISSION"]).exists()
 
@@ -235,7 +276,7 @@ def main():
             session.send(b"\x1b"); session.pump(0.2)
             session.send(b"\x1b"); session.pump(0.2); session.close()
         assert cron.read_bytes() == before
-    print("Stable-form PTY passed: real-cell geometry at three sizes, arrow navigation/selectors, fixed payload/inactive slots, anchored expansion, stable direct/Pueue rows, disabled keyboard/mouse skipping, output clear/refill, inactive invalid draft values, no job execution, terminal restoration")
+    print("Stable-form PTY passed: real-cell geometry at three sizes, arrow navigation/selectors, fixed payload/inactive slots, anchored expansion, stable direct/Pueue/output-policy rows, disabled keyboard/mouse skipping, file routing clear/refill and retained drafts, contextual output help, inactive invalid draft values, no job execution, terminal restoration")
 
 
 if __name__ == "__main__":

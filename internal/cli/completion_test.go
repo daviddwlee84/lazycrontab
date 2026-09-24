@@ -240,6 +240,8 @@ func TestCompletionFlagsAndFreeformArgumentsUseCorrectDirectives(t *testing.T) {
 		want []string
 	}{
 		{[]string{"add", "--runner", ""}, []string{"direct", "pueue"}},
+		{[]string{"add", "--output-policy", ""}, []string{"discard", "files", "inherit", "stderr-only"}},
+		{[]string{"edit", "job", "--enqueue-output", ""}, []string{"inherit", "quiet"}},
 		{[]string{"add", "--preset", "managed"}, []string{"managed-shell"}},
 		{[]string{"sources", "add", "--kind", ""}, []string{"file", "system", "user"}},
 		{[]string{"schedule", "next", "--dialect", "s"}, []string{"supercronic", "system"}},

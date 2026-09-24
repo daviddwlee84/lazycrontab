@@ -62,7 +62,21 @@ Execute owns the signal context; Bubble Tea uses WithoutSignalHandler.
 Host discovery is static OpenSSH alias inventory or typed dev JSON, not shared
 credential/config storage. Script presets and read-only checks never execute
 user scripts or install dependencies. Generated arguments are percent-encoded
-once for native cron. Preserve legacy recipes and stored commands on default Run.
+once for native cron; percent-separated stdin must remain encoded in one physical
+crontab line. Preserve legacy recipes and stored commands on default Run.
+
+Task output policies apply inside the scoped task payload. Pueue enqueue notices
+are separate: quiet suppresses only the client stdout, retaining stderr and status.
+Legacy absent policies preserve installed behavior; changing enqueue notices alone
+uses a reviewed migration without rebinding executables, environment or payload.
+Default Run may bypass owned suppression only through a versioned frozen submission
+with matching dialect, command digest and exact scheduled rendering. Invalid
+metadata falls back to the source command, never inferred redirect removal.
+The corresponding task ID remains explicitly unavailable. Inactive output paths
+are draft values only; log inspection is independent of output routing. Mounted
+managed-script forms load their body even with an enqueue override; only headless
+enqueue-only migrations may skip that read. MAILTO belongs to the crontab scope,
+not the job's Variables. Do not manage mailboxes, mail services or log rotation.
 
 Managed shell bodies are saved under the selected host's XDG data directory as
 immutable content-addressed versions. Review/dry-run creates no target files.

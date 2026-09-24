@@ -41,6 +41,10 @@ func configureCompletions(root *cobra.Command, o *options) {
 					completion = o.completeSourceFlag
 				case "runner":
 					completion = completeEnum("direct", "pueue")
+				case "output-policy":
+					completion = completeEnum(outputPolicies...)
+				case "enqueue-output":
+					completion = completeEnum(enqueueOutputs...)
 				case "preset":
 					completion = completeEnum(jobPresets()...)
 				case "kind":

@@ -251,20 +251,26 @@ func TestJobFieldBindingsReservePayloadAndConditionalDetails(t *testing.T) {
 	}
 	for _, runner := range []string{"direct", "pueue"} {
 		values["runner"] = runner
-		group := fields["group"]
-		if group.Show != nil || group.DisabledWhen == nil || (group.DisabledWhen(values) != "") != (runner == "direct") {
-			t.Fatal("group row is hidden or has wrong enabled state", runner)
-		}
-		for _, key := range []string{"output", "stderr", "log"} {
+		for _, key := range []string{"group", "enqueue_output"} {
 			field := fields[key]
-			values[key] = ""
-			if field.Show != nil || field.DisabledWhen == nil || !field.KeepEditingOnDisable || (field.DisabledWhen(values) != "") != (runner == "pueue") {
-				t.Fatal("empty output row did not reserve a disabled slot", runner, key)
+			if field.Show != nil || field.DisabledWhen == nil || (field.DisabledWhen(values) != "") != (runner == "direct") {
+				t.Fatal("Pueue row is hidden or has wrong enabled state", runner, key)
 			}
-			values[key] = "/keep/explicit.log"
-			if field.DisabledWhen(values) != "" {
-				t.Fatal("existing output path became inaccessible", runner, key)
+		}
+		for _, policy := range outputPolicies {
+			values["output_policy"] = policy
+			for _, key := range []string{"output", "stderr"} {
+				field := fields[key]
+				for _, path := range []string{"", "/keep/explicit.log"} {
+					values[key] = path
+					if field.Show != nil || field.DisabledWhen == nil || (field.DisabledWhen(values) != "") != (policy != "files") {
+						t.Fatal("file row did not follow selected policy", runner, policy, key, path)
+					}
+				}
 			}
+		}
+		if fields["log"].Show != nil || fields["log"].DisabledWhen != nil {
+			t.Fatal("inspection path must stay independently enabled", runner)
 		}
 	}
 }
@@ -345,6 +351,7 @@ func TestPueueExplicitRedirectValuesRemainEffective(t *testing.T) {
 		t.Fatal(err)
 	}
 	values["command"], values["runner"] = "echo active", "pueue"
+	values["output_policy"] = "files"
 	values["output"], values["stderr"], values["log"] = filepath.Join(dir, "stdout.log"), filepath.Join(dir, "stderr.log"), filepath.Join(dir, "inspect.log")
 	review, err := spec.Build(context.Background(), values)
 	if err != nil {

@@ -15,6 +15,7 @@ import sys
 import tempfile
 
 from pty_smoke import Session
+from pty_screen import SessionScreen
 
 
 @contextmanager
@@ -115,8 +116,14 @@ echo 'FIXTURE EDITOR HANDOFF'
         def review(session):
             mark = session.mark()
             session.send(b"\x13")
-            session.expect("Managed script content", mark)
             session.expect("Enter does not apply", mark)
+            # Long target paths and output/mail explanations can put the
+            # managed body on the next review page. Verify it through the real
+            # viewport rather than requiring it to fit above the fold.
+            screen = SessionScreen(session, 120, 40)
+            if not any("Managed script content" in line for line in screen.read()):
+                session.send(b"\x1b[6~")
+            screen.expect("Managed script content", "Enter does not apply")
 
         def apply(session):
             mark = session.mark()
@@ -189,9 +196,12 @@ echo 'FIXTURE EDITOR HANDOFF'
             session.close()
         assert cron.read_bytes() == before_cron and scripts() == before_scripts, "cancelled nested editor saved changes"
 
-        with terminal(binary, [*base, "edit", job_id, "--interactive"], env, root) as session:
+        with terminal(binary, [*base, "edit", job_id, "--interactive", "--enqueue-output", "inherit"], env, root) as session:
             session.expect("edit job")
             enter_content(session, 2)
+            # A CLI notification override must not turn a mounted managed
+            # draft into an empty body; further execution edits remain valid.
+            SessionScreen(session, 120, 40).expect('echo "hi"', "100%")
             editor_handoff(session, editor_body)
             leave_content(session)
             assert cron.read_bytes() == before_cron and scripts() == before_scripts, "editor handoff wrote target"

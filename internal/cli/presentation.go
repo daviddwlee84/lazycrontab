@@ -124,7 +124,11 @@ func runRecordText(r service.RunRecord) string {
 	case "completed":
 		heading = fmt.Sprintf("Completed · exit %d", r.ExitCode)
 	case "queued":
-		heading = "Queued in Pueue · task " + r.TaskID
+		if r.TaskID == "" {
+			heading = "Queued in Pueue · task ID unavailable"
+		} else {
+			heading = "Queued in Pueue · task " + r.TaskID
+		}
 	case "unknown":
 		heading = "Run outcome unknown · inspect the target before retrying"
 	}
@@ -133,7 +137,7 @@ func runRecordText(r service.RunRecord) string {
 		lines = append(lines, "Finished: "+r.Finished.Format("Mon 2006-01-02 15:04:05 -07:00"))
 	}
 	if r.Status == "queued" {
-		lines = append(lines, "Pueue captures stdout/stderr. Inspect with pueue log or lazypueue.")
+		lines = append(lines, "Inspect task status and captured output with pueue log or lazypueue; explicit task-output policies still apply.")
 	} else if r.Output != "" {
 		lines = append(lines, "", "Output", r.Output)
 	}

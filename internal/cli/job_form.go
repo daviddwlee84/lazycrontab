@@ -94,20 +94,16 @@ func describeJobExecution(r service.Recipe, command string) string {
 	if r.Directory != "" {
 		lines = append(lines, "Working directory: "+r.Directory)
 	}
-	if r.Runner == "pueue" && r.Output == "" && r.Stderr == "" {
-		lines = append(lines, "Output: captured by Pueue")
-	}
-	if r.Output != "" {
-		lines = append(lines, "Output file: "+r.Output)
-	}
-	if r.Stderr != "" {
-		lines = append(lines, "Error output file: "+r.Stderr)
-	}
 	return strings.Join(lines, "\n")
 }
 
 func recipeValues(j document.Job, r service.Recipe) map[string]string {
 	v := map[string]string{"schedule": j.Schedule, "command": j.Command, "name": j.Name, "remark": j.Remark, "enabled": fmt.Sprint(j.Enabled), "runner": r.Runner, "group": r.Group, "directory": r.Directory, "output": r.Output, "stderr": r.Stderr, "script": r.Script, "log": r.Log, "preset": "command", "runtime": "", "project": "", "args": "", "environment": ""}
+	v["output_policy"] = service.EffectiveOutputPolicy(r)
+	v["enqueue_output"] = "quiet"
+	if r.Runner == "pueue" {
+		v["enqueue_output"] = service.EffectiveEnqueueOutput(r)
+	}
 	if r.ScriptTask != nil {
 		v["preset"] = r.ScriptTask.Preset
 		v["runtime"] = r.ScriptTask.Runtime
@@ -131,6 +127,14 @@ func recipeValues(j document.Job, r service.Recipe) map[string]string {
 }
 
 func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, id string, overrides map[string]string) (ui.FormSpec, map[string]string, error) {
+	return jobFormSpecWithOptions(ctx, s, host, source, op, id, overrides, jobFormOptions{})
+}
+
+type jobFormOptions struct {
+	Headless bool
+}
+
+func jobFormSpecWithOptions(ctx context.Context, s *service.Service, host, source, op, id string, overrides map[string]string, options jobFormOptions) (ui.FormSpec, map[string]string, error) {
 	if op == "add" {
 		id = ""
 	}
@@ -173,7 +177,10 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 	if op == "edit" && r.ManagedScript != nil {
 		_, replaceCommand := overrides["command"]
 		_, replaceBody := overrides["script_content"]
-		if !replaceCommand && !replaceBody {
+		// Mounted forms must preload the body: a user can change other execution
+		// fields after arriving with an enqueue policy prefilled. Only the
+		// headless migration can promise not to need or recompile the script.
+		if !replaceCommand && !replaceBody && !(options.Headless && r.Runner == "pueue" && enqueueOnlyOverrides(overrides)) {
 			saved, _ := snap.Document.Find(id)
 			values["script_content"], err = s.ReadManagedScript(ctx, service.Entry{Job: saved, Host: host, Source: source, Dialect: snap.Document.Dialect}, r)
 			if err != nil {
@@ -212,9 +219,17 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 	for k, v := range overrides {
 		values[k] = v
 	}
+	applyOutputOverrides(values, overrides)
 	build := func(ctx context.Context, v map[string]string) (ui.Review, error) {
 		v = effectiveJobValues(v, commandScript)
 		executionUnchanged := op == "edit" && sameExecutionValues(v, initialExecution)
+		enqueueOnly := op == "edit" && r.Runner == "pueue" && sameExecutionExceptEnqueue(v, initialExecution) && (!executionUnchanged || enqueueOnlyOverrides(overrides))
+		if !validOutputPolicy(v["output_policy"]) {
+			return ui.Review{}, fmt.Errorf("task output must be inherit, files, stderr-only or discard")
+		}
+		if v["output_policy"] == "files" && v["output"] == "" && v["stderr"] == "" {
+			return ui.Review{}, fmt.Errorf("Files requires an output or stderr path; choose Inherit to stop redirecting")
+		}
 		targetHost, targetSource := host, source
 		if op == "add" {
 			if v["host"] != "" {
@@ -269,6 +284,8 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		recipe.Directory = v["directory"]
 		recipe.Output = v["output"]
 		recipe.Stderr = v["stderr"]
+		recipe.OutputPolicy = v["output_policy"]
+		recipe.EnqueueOutput = v["enqueue_output"]
 		recipe.Script = v["script"]
 		recipe.Log = v["log"]
 		assignments, err := splitArgs(v["environment"])
@@ -283,7 +300,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		recipe.ManagedScript = nil
 		var managedPlan *service.ManagedScriptPlan
 		entry := service.Entry{Job: job, Host: targetHost, Source: targetSource, Dialect: dialect}
-		if preset == "managed-shell" {
+		if preset == "managed-shell" && !enqueueOnly {
 			body := v["script_content"]
 			if strings.TrimSpace(body) == "" {
 				return ui.Review{}, fmt.Errorf("managed script content is required")
@@ -314,7 +331,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 				}
 			}
 		}
-		if preset != "command" {
+		if preset != "command" && !enqueueOnly {
 			args, err := splitArgs(v["args"])
 			if err != nil {
 				return ui.Review{}, fmt.Errorf("argument quoting is incomplete")
@@ -328,17 +345,31 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			}
 			recipe.ScriptTask = &service.ScriptTask{Version: 1, Preset: scriptPreset, Runtime: runtime, Project: v["project"], Args: args}
 		}
-		if executionUnchanged {
+		if executionUnchanged || enqueueOnly {
 			// Metadata and schedule edits must not silently rebind a pinned
 			// runtime/Pueue executable or rebuild wrappers after SHELL changes.
 			recipe = r
+			recipe.Log = v["log"]
+			if recipe.Log != r.Log && recipe.Log != "" {
+				if strings.ContainsAny(recipe.Log, "\r\n\x00") {
+					return ui.Review{}, fmt.Errorf("log paths cannot contain newlines or NUL")
+				}
+				if recipe.ScriptTask != nil {
+					recipe.Log, err = s.ResolveTargetPath(ctx, targetHost, recipe.Log, recipe.Directory)
+					if err != nil {
+						return ui.Review{}, err
+					}
+				} else if !filepath.IsAbs(recipe.Log) && !strings.HasPrefix(recipe.Log, "~/") {
+					return ui.Review{}, fmt.Errorf("log must be an absolute target path or start with ~/")
+				}
+			}
 		} else {
 			recipe, err = s.ResolveScriptRecipe(ctx, entry, recipe)
 			if err != nil {
 				return ui.Review{}, err
 			}
 		}
-		if recipe.Runner == "pueue" && !executionUnchanged {
+		if recipe.Runner == "pueue" && !executionUnchanged && !enqueueOnly {
 			caps := s.Capabilities(ctx, targetHost)
 			if !caps.Ready {
 				return ui.Review{}, fmt.Errorf("Pueue unavailable: %s", caps.Error)
@@ -354,11 +385,18 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			}
 			recipe.PueuePath = caps.PueuePath
 		}
-		if executionUnchanged {
+		if enqueueOnly {
+			saved, _ := snap.Document.Find(id)
+			stored := service.Entry{Job: saved, Host: targetHost, Source: targetSource, Dialect: dialect}
+			job.Command, recipe, err = service.UpdateEnqueueOutput(stored, recipe, v["enqueue_output"])
+			if err != nil {
+				return ui.Review{}, err
+			}
+		} else if executionUnchanged {
 			saved, _ := snap.Document.Find(id)
 			job.Command = saved.Command
 		} else {
-			job.Command, err = service.Compile(entry, recipe)
+			job.Command, recipe, err = service.CompileRecipe(entry, recipe)
 			if err != nil {
 				return ui.Review{}, err
 			}
@@ -387,14 +425,14 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		checks := ""
 		if managedPlan != nil {
 			checks = "\n\n" + s.CheckManagedRecipe(ctx, entry, recipe, *managedPlan).Text()
-		} else if recipe.ScriptTask != nil || recipe.Script != "" || recipe.Directory != "" || recipe.Output != "" || recipe.Stderr != "" {
+		} else if !executionUnchanged && !enqueueOnly && (recipe.ScriptTask != nil || recipe.Script != "" || recipe.Directory != "" || recipe.Output != "" || recipe.Stderr != "") {
 			checks = "\n\n" + s.CheckRecipe(ctx, entry, recipe).Text()
 		}
 		scriptPreview := ""
 		if managedPlan != nil {
 			scriptPreview = "\n\nManaged script content\n" + managedPlan.Content + "\nSaved only when you Apply; previous versions are retained."
 		}
-		return ui.Review{Text: targetHost + " / " + targetSource + "\n" + describeJobExecution(recipe, v["command"]) + "\n\nSchedule: " + job.Schedule + "\n" + preview + scriptPreview + checks + "\n" + strings.Join(plan.Warnings, "\n"), Diff: plan.Diff, Data: jobReview{plan, recipe, entry}}, nil
+		return ui.Review{Text: targetHost + " / " + targetSource + "\n" + describeJobExecution(recipe, v["command"]) + "\n" + describeOutputRouting(recipe, job.Environment, dialect) + "\n\nSchedule: " + job.Schedule + "\n" + preview + scriptPreview + checks + "\n" + strings.Join(plan.Warnings, "\n"), Diff: plan.Diff, Data: jobReview{plan, recipe, entry}}, nil
 	}
 	apply := func(ctx context.Context, _ map[string]string, review ui.Review) (string, error) {
 		data := review.Data.(jobReview)
@@ -455,7 +493,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		ui.Field{Key: "enabled", Label: "Enabled", Options: []string{"true", "false"}, Hint: "Choose false to save the job without scheduling it while you fix a runtime finding."},
 		ui.Field{Key: "remark", Label: "Remark / why"},
 	)
-	for _, key := range []string{"runner", "group", "environment", "output", "stderr", "log"} {
+	for _, key := range []string{"runner", "group", "enqueue_output", "environment", "output_policy", "output", "stderr", "log"} {
 		field := ui.Field{Key: key, Label: key, Advanced: true}
 		switch key {
 		case "runner":
@@ -465,8 +503,19 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			field.Label = "Existing Pueue group"
 			field.DisabledWhen = pueueGroupDisabled
 			field.Hint = pueueOutputHint
+		case "enqueue_output":
+			field.Label = "Enqueue notices"
+			field.Options = enqueueOutputs
+			field.OptionLabels = enqueueOutputLabels
+			field.DisabledWhen = pueueEnqueueDisabled
+			field.Hint = "Quiet suppresses Pueue submission stdout; enqueue errors on stderr remain visible. Task logs are separate."
 		case "environment":
 			field.Label = "Variables (literal NAME=value; quote spaces)"
+		case "output_policy":
+			field.Label = "Task output"
+			field.Options = outputPolicies
+			field.OptionLabels = outputPolicyLabels
+			field.Hint = "Inherit uses cron output or Pueue task logs. Files appends to your paths; no automatic rotation."
 		case "output":
 			field.Label = "Append output to file"
 			field.Pick = jobPathPicker(s, chosenHost, key, false)
@@ -476,12 +525,10 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		case "log":
 			field.Label = "Existing log to inspect"
 			field.Pick = jobPathPicker(s, chosenHost, key, false)
+			field.Hint = "Optional inspection file; does not redirect output. Pueue task output is also available via pueue log or lazypueue."
 		}
-		if key == "output" || key == "stderr" || key == "log" {
-			// Reserve every row; explicit paths remain editable because their
-			// redirects still apply when switching from direct execution.
-			field.DisabledWhen = pueuePathDisabled(key)
-			field.KeepEditingOnDisable = true
+		if key == "output" || key == "stderr" {
+			field.DisabledWhen = outputPathDisabled
 		}
 		fields = append(fields, field)
 	}
@@ -490,7 +537,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			fields[i].Value = value
 		}
 	}
-	spec := ui.FormSpec{Title: op + " job · " + host + " / " + source, Popup: true, Fields: fields, Mouse: c.Mouse, Theme: c.Theme, Build: build, Apply: apply, TextEditor: editor, ScheduleContext: contextFor, LoadKeys: []string{"host", "source", "runner", "preset", "script", "project", "directory", "runtime", "output", "stderr"}}
+	spec := ui.FormSpec{Title: op + " job · " + host + " / " + source, Popup: true, Fields: fields, Mouse: c.Mouse, Theme: c.Theme, Build: build, Apply: apply, TextEditor: editor, ScheduleContext: contextFor, LoadKeys: []string{"host", "source", "runner", "preset", "script", "project", "directory", "runtime", "output_policy", "output", "stderr"}}
 	spec.Load = func(ctx context.Context, v map[string]string) []ui.FieldUpdate {
 		h := chosenHost(v)
 		srcID := chosenSource(v)

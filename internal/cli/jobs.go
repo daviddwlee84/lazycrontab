@@ -165,6 +165,8 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		{"name", "", "Short job name"}, {"schedule", "", "Cron expression"}, {"when", "", "Limited English schedule phrase"},
 		{"command", "", "Complete shell command as one argument"}, {"remark", "", "Why this job exists"},
 		{"runner", "direct", "direct or pueue"}, {"group", "", "Existing Pueue group"},
+		{"output-policy", "inherit", "Task output: inherit, files, stderr-only or discard"},
+		{"enqueue-output", "quiet", "Pueue submission notices: quiet or inherit (new Pueue jobs default quiet)"},
 		{"directory", "", "Target working directory; script presets resolve relative paths"},
 		{"output", "", "Append stdout and, by default, stderr to this file"}, {"stderr", "", "Append stderr separately"},
 		{"script", "", "Target script path; metadata only with the command preset"}, {"log", "", "Explicit existing log path"},
@@ -180,6 +182,9 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 	f.StringArray("env", nil, "Literal per-job NAME=value; repeat for more")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		get := func(key string) string { value, _ := f.GetString(key); return value }
+		if err := validateOutputFlags(cmd); err != nil {
+			return err
+		}
 		if get("when") != "" && get("schedule") != "" {
 			return usage("choose --when or --schedule")
 		}
@@ -206,9 +211,9 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 			return usage("managed-shell takes script content, not an existing --script path")
 		}
 		overrides := map[string]string{}
-		for _, key := range []string{"name", "schedule", "command", "remark", "runner", "group", "directory", "output", "stderr", "script", "log", "preset", "runtime", "project"} {
+		for _, key := range []string{"name", "schedule", "command", "remark", "runner", "group", "directory", "output-policy", "enqueue-output", "output", "stderr", "script", "log", "preset", "runtime", "project"} {
 			if f.Changed(key) {
-				overrides[key] = get(key)
+				overrides[strings.ReplaceAll(key, "-", "_")] = get(key)
 			}
 		}
 		if managedContent {
@@ -274,8 +279,11 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		if op == "edit" {
 			id = args[0]
 		}
-		spec, values, err := newJobFormSpec(cmd.Context(), s, host, source, op, id, overrides)
+		spec, values, err := jobFormSpecWithOptions(cmd.Context(), s, host, source, op, id, overrides, jobFormOptions{Headless: !wizard})
 		if err != nil {
+			return err
+		}
+		if err := validateOutputFlagValues(cmd, values, wizard); err != nil {
 			return err
 		}
 		if values["preset"] == "command" && (f.Changed("runtime") || f.Changed("project") || f.Changed("arg")) {

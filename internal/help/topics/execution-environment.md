@@ -18,10 +18,13 @@ guarantee that arbitrary user code will run successfully.
 
 Per-job environment values are literal. Writing `$PATH:/new/path` is not an
 instruction to expand another PATH. Review the complete intended value.
+Per-job MAILTO is also just a value passed to the process; cron's mail setting
+comes from a MAILTO assignment in the crontab itself. Task output, mail settings
+and Pueue enqueue notices are explained in output-and-mail.
 
 Supercronic inherits the environment of its own daemon/container. A file alone
 does not reveal that environment. Manual runs and checks on the selected host
 cannot recreate an unrelated container process. Unknown context is shown as
 unknown, not as a successful verification.
 
-See also: paths-and-scripts, uv
+See also: paths-and-scripts, output-and-mail, uv

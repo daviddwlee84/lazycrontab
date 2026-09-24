@@ -2,6 +2,37 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Task output and cron mail revision
+
+Go 1.26.6 race tests, vet and builds passed on macOS arm64 and in a disposable
+Linux arm64 container. All six PTY suites passed on both platforms. After the
+interactive managed-script prefill fix, CLI race/vet checks and the managed-script
+PTY were repeated on both. These checks ran locally/in a container, not on hosted
+GitHub Actions. Linux and macOS amd64 cross-builds also passed.
+
+Service fixtures verify inherited, file, stderr-only and discarded task streams,
+append/merge/separate-file behavior, preserved exit status, comments and percent
+stdin. Native percent input round-trips through a single physical crontab line,
+including literal backslashes. Fake Pueue tests distinguish task output from
+enqueue stdout/stderr, preserve manual task IDs through verified frozen commands,
+and retain exact source commands with an honest unavailable-ID warning when the
+submission metadata cannot be verified. Enqueue-only migration preserves existing
+payloads, shells and executable paths without probing or submitting to Pueue.
+
+CLI tests cover legacy path flags, policy conflicts, inactive draft projection,
+MAILTO scope, no-op/metadata edits, independent log paths and read-only previews.
+The managed-script regression checks that an interactive enqueue override loads
+the saved body and permits further edits, while headless notification migration
+does not require the script file. CLI/F1 expose the same output-and-mail topic.
+
+Real terminal cells confirm fixed runner/policy rows, disabled keyboard/mouse
+skipping, editable empty file paths, clear/refill, retained values after policy
+changes, and contextual help returning to the same draft at 120×54, 80×24 and
+40×12. Long managed-script reviews are inspected through actual page navigation.
+Native zsh Tab inserts both policy enums; generated Bash completion is syntax
+checked. Native Bash Tab, real mail delivery and live scheduler/queue execution
+were not exercised. No mailbox, crontab MAILTO, user shell or mail service changed.
+
 ## v0.1.0 source-release preparation
 
 The committed implementation at `bce52b0` passed an exact-source installation

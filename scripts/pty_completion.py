@@ -155,6 +155,8 @@ exec sh -c "$last"
                 ("lazycrontab --host lab edit remote-s", "lazycrontab --host lab edit remote-seed"),
                 ("lazycrontab --host lab edit se", "lazycrontab --host lab edit se"),
                 ("lazycrontab add --runner pu", "lazycrontab add --runner pueue"),
+                ("lazycrontab add --output-policy st", "lazycrontab add --output-policy stderr-only"),
+                ("lazycrontab edit seed-local --enqueue-output qu", "lazycrontab edit seed-local --enqueue-output quiet"),
                 ("lazycrontab add --preset managed-s", "lazycrontab add --preset managed-shell"),
                 ("lazycrontab sources add extra --kind sy", "lazycrontab sources add extra --kind system"),
                 ("lazycrontab --config broken.toml so", "lazycrontab --config broken.toml sources"),

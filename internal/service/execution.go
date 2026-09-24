@@ -18,19 +18,22 @@ import (
 )
 
 type Recipe struct {
-	CommandDigest string            `json:"command_digest,omitempty"`
-	Original      string            `json:"original,omitempty"`
-	Runner        string            `json:"runner,omitempty"`
-	Group         string            `json:"group,omitempty"`
-	PueuePath     string            `json:"pueue_path,omitempty"`
-	Directory     string            `json:"directory,omitempty"`
-	Output        string            `json:"output,omitempty"`
-	Stderr        string            `json:"stderr,omitempty"`
-	Script        string            `json:"script,omitempty"`
-	Log           string            `json:"log,omitempty"`
-	ScriptTask    *ScriptTask       `json:"script_task,omitempty"`
-	ManagedScript *ManagedScript    `json:"managed_script,omitempty"`
-	Environment   map[string]string `json:"environment,omitempty"`
+	CommandDigest   string            `json:"command_digest,omitempty"`
+	Original        string            `json:"original,omitempty"`
+	Runner          string            `json:"runner,omitempty"`
+	Group           string            `json:"group,omitempty"`
+	PueuePath       string            `json:"pueue_path,omitempty"`
+	Directory       string            `json:"directory,omitempty"`
+	Output          string            `json:"output,omitempty"`
+	Stderr          string            `json:"stderr,omitempty"`
+	OutputPolicy    string            `json:"output_policy,omitempty"`
+	EnqueueOutput   string            `json:"enqueue_output,omitempty"`
+	PueueSubmission *PueueSubmission  `json:"pueue_submission,omitempty"`
+	Script          string            `json:"script,omitempty"`
+	Log             string            `json:"log,omitempty"`
+	ScriptTask      *ScriptTask       `json:"script_task,omitempty"`
+	ManagedScript   *ManagedScript    `json:"managed_script,omitempty"`
+	Environment     map[string]string `json:"environment,omitempty"`
 }
 type Capabilities struct {
 	PueuePath    string   `json:"pueue_path,omitempty"`
@@ -148,13 +151,21 @@ func SplitPercent(raw string) (string, string) {
 	return command.String(), input.String()
 }
 func cronEscape(s string) string { return strings.ReplaceAll(s, "%", "\\%") }
-func Compile(e Entry, r Recipe) (string, error) {
+func compileTask(e Entry, r Recipe) (string, error) {
+	if err := validateOutputPolicies(r); err != nil {
+		return "", err
+	}
+	outputPolicy := EffectiveOutputPolicy(r)
 	if r.ManagedScript != nil {
 		if err := validateManagedRecipe(e, r); err != nil {
 			return "", err
 		}
 	}
-	for name, path := range map[string]string{"directory": r.Directory, "output": r.Output, "stderr": r.Stderr, "script": r.Script, "log": r.Log} {
+	paths := map[string]string{"directory": r.Directory, "script": r.Script, "log": r.Log}
+	if outputPolicy == OutputFiles {
+		paths["output"], paths["stderr"] = r.Output, r.Stderr
+	}
+	for name, path := range paths {
 		if path != "" && (!filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") || strings.ContainsAny(path, "\r\n\x00")) {
 			return "", fmt.Errorf("%s must be an absolute target path or start with ~/", name)
 		}
@@ -184,7 +195,7 @@ func Compile(e Entry, r Recipe) (string, error) {
 	if strings.ContainsAny(raw, "\r\n\x00") {
 		return "", fmt.Errorf("use a script for multiline commands")
 	}
-	if r.Runner == "direct" && r.Directory == "" && r.Output == "" && r.Stderr == "" && len(r.Environment) == 0 {
+	if r.Runner == "direct" && r.Directory == "" && outputPolicy == OutputInherit && len(r.Environment) == 0 {
 		return raw, nil
 	}
 	code, input := raw, ""
@@ -196,7 +207,7 @@ func Compile(e Entry, r Recipe) (string, error) {
 		shell = "/bin/sh"
 	}
 	payload := commandJoin([]string{shell, "-c", code})
-	if r.Runner == "pueue" && e.Environment["SHELL"] == "" && len(r.Environment) == 0 && input == "" && r.Output == "" && r.Stderr == "" && !strings.HasPrefix(r.Directory, "~") {
+	if r.Runner == "pueue" && e.Environment["SHELL"] == "" && len(r.Environment) == 0 && input == "" && outputPolicy == OutputInherit && !strings.HasPrefix(r.Directory, "~") {
 		// Pueue owns shell execution (Unix default: sh -c), so a plain queued
 		// command needs no second shell. Explicit cron SHELL, per-job env,
 		// stdin and redirects retain the wrapper that defines their scope.
@@ -214,22 +225,34 @@ func Compile(e Entry, r Recipe) (string, error) {
 		payload = commandJoin(args) + " " + payload
 	}
 	if input != "" {
-		payload = "printf '%s' " + commandQuote(input) + " | " + payload
+		// Cron stdin contains newlines, but the generated entry must remain one
+		// physical line. Escape existing backslashes before encoding newlines;
+		// printf %b then restores bytes without treating literal \c etc. as
+		// control sequences supplied by the user's original stdin.
+		encodedInput := strings.ReplaceAll(strings.ReplaceAll(input, "\\", "\\\\"), "\n", "\\n")
+		payload = "printf '%b' " + commandQuote(encodedInput) + " | " + payload
 	}
 	// Pueue applies an absolute working-directory before spawning the task.
 	// Legacy ~/ paths still need target HOME expansion inside the payload.
 	if r.Directory != "" && (r.Runner != "pueue" || strings.HasPrefix(r.Directory, "~")) {
 		payload = "cd " + commandPath(r.Directory) + " && " + payload
 	}
-	if r.Output != "" || r.Stderr != "" {
+	if outputPolicy != OutputInherit {
 		payload = "( " + payload + " )"
-		if r.Output != "" {
-			payload += " >> " + commandPath(r.Output)
-		}
-		if r.Stderr != "" {
-			payload += " 2>> " + commandPath(r.Stderr)
-		} else if r.Output != "" {
-			payload += " 2>&1"
+		switch outputPolicy {
+		case OutputFiles:
+			if r.Output != "" {
+				payload += " >> " + commandPath(r.Output)
+			}
+			if r.Stderr != "" {
+				payload += " 2>> " + commandPath(r.Stderr)
+			} else if r.Output != "" {
+				payload += " 2>&1"
+			}
+		case OutputStderrOnly:
+			payload += " > /dev/null"
+		case OutputDiscard:
+			payload += " > /dev/null 2>&1"
 		}
 	}
 	if r.Runner == "pueue" {
@@ -254,6 +277,7 @@ func Compile(e Entry, r Recipe) (string, error) {
 
 type ExecutionPlan struct {
 	InheritEnvironment bool              `json:"inherit_environment"`
+	TaskIDUnavailable  bool              `json:"task_id_unavailable,omitempty"`
 	User               string            `json:"user"`
 	Host               string            `json:"host"`
 	Source             string            `json:"source"`
@@ -268,19 +292,20 @@ type ExecutionPlan struct {
 	Warning            string            `json:"warning,omitempty"`
 }
 type RunRecord struct {
-	OutputTruncated bool      `json:"output_truncated,omitempty"`
-	ID              string    `json:"id"`
-	Host            string    `json:"host"`
-	Source          string    `json:"source"`
-	JobID           string    `json:"job_id"`
-	Started         time.Time `json:"started"`
-	Finished        time.Time `json:"finished"`
-	ExitCode        int       `json:"exit_code"`
-	Status          string    `json:"status"`
-	Output          string    `json:"output"`
-	Stderr          string    `json:"stderr"`
-	TaskID          string    `json:"task_id,omitempty"`
-	Error           string    `json:"error,omitempty"`
+	OutputTruncated   bool      `json:"output_truncated,omitempty"`
+	TaskIDUnavailable bool      `json:"task_id_unavailable,omitempty"`
+	ID                string    `json:"id"`
+	Host              string    `json:"host"`
+	Source            string    `json:"source"`
+	JobID             string    `json:"job_id"`
+	Started           time.Time `json:"started"`
+	Finished          time.Time `json:"finished"`
+	ExitCode          int       `json:"exit_code"`
+	Status            string    `json:"status"`
+	Output            string    `json:"output"`
+	Stderr            string    `json:"stderr"`
+	TaskID            string    `json:"task_id,omitempty"`
+	Error             string    `json:"error,omitempty"`
 }
 
 func (s *Service) RunPlan(ctx context.Context, snap Snapshot, id string, r *Recipe) (ExecutionPlan, error) {
@@ -298,12 +323,22 @@ func (s *Service) RunPlan(ctx context.Context, snap Snapshot, id string, r *Reci
 	entry := Entry{Job: j, Host: snap.Host, Source: snap.Source, Dialect: snap.Document.Dialect}
 	command := j.Command
 	runner := "direct"
+	metadataWarning := ""
+	taskIDUnavailable := false
 	if r == nil {
 		// The source command stays authoritative for an ordinary Run. A valid
 		// sidecar may identify queue submission, but must not rebuild wrappers
 		// after an external environment change (for example SHELL).
-		if stored, err := LoadRecipe(entry); err == nil && stored.Runner == "pueue" {
+		if stored, err := LoadRecipe(entry); err != nil {
+			metadataWarning = "Helper metadata is unavailable or does not match this job; runs the native source command unchanged."
+		} else if stored.Runner == "pueue" {
 			runner = "pueue"
+			if manual, err := storedManualSubmission(entry, stored); err == nil {
+				command = manual
+			} else {
+				metadataWarning = "Pueue submission metadata cannot be verified; runs the native source command unchanged. The task ID will be unavailable."
+				taskIDUnavailable = true
+			}
 		}
 	}
 	if r != nil {
@@ -323,7 +358,7 @@ func (s *Service) RunPlan(ctx context.Context, snap Snapshot, id string, r *Reci
 			}
 			r.PueuePath = caps.PueuePath
 		}
-		command, e = Compile(entry, *r)
+		command, e = CompileManual(entry, *r)
 		if e != nil {
 			return ExecutionPlan{}, e
 		}
@@ -343,7 +378,7 @@ func (s *Service) RunPlan(ctx context.Context, snap Snapshot, id string, r *Reci
 			env[k] = v
 		}
 	}
-	p := ExecutionPlan{Host: snap.Host, Source: snap.Source, JobID: id, Command: command, Shell: env["SHELL"], Directory: env["HOME"], Environment: env, Runner: runner, Revision: snap.Document.Revision, User: parts[1]}
+	p := ExecutionPlan{Host: snap.Host, Source: snap.Source, JobID: id, Command: command, Shell: env["SHELL"], Directory: env["HOME"], Environment: env, Runner: runner, Revision: snap.Document.Revision, User: parts[1], TaskIDUnavailable: taskIDUnavailable}
 	if entry.Dialect == schedule.System {
 		p.Command, p.Stdin = SplitPercent(command)
 		p.Warning = "Cron-like environment; daemon-specific PAM, limits and runtime conditions may differ."
@@ -355,10 +390,13 @@ func (s *Service) RunPlan(ctx context.Context, snap Snapshot, id string, r *Reci
 		}
 		p.Warning = "Runs on the selected host. An existing Supercronic/container process environment is not available."
 	}
+	if metadataWarning != "" {
+		p.Warning += "\n" + metadataWarning
+	}
 	return p, nil
 }
 func (s *Service) Run(ctx context.Context, p ExecutionPlan) (RunRecord, error) {
-	record := RunRecord{ID: s.Now().UTC().Format("20060102T150405.000000000Z") + "-" + document.NewID()[:6], Host: p.Host, Source: p.Source, JobID: p.JobID, Started: s.Now()}
+	record := RunRecord{ID: s.Now().UTC().Format("20060102T150405.000000000Z") + "-" + document.NewID()[:6], Host: p.Host, Source: p.Source, JobID: p.JobID, Started: s.Now(), TaskIDUnavailable: p.TaskIDUnavailable}
 	h, src, e := s.source(p.Host, p.Source)
 	if e != nil {
 		return record, e
@@ -396,7 +434,9 @@ func (s *Service) Run(ctx context.Context, p ExecutionPlan) (RunRecord, error) {
 		}
 	} else if p.Runner == "pueue" {
 		record.Status = "queued"
-		record.TaskID = strings.TrimSpace(string(r.Stdout))
+		if !p.TaskIDUnavailable {
+			record.TaskID = strings.TrimSpace(string(r.Stdout))
+		}
 	}
 	base, pathErr := config.Base("state")
 	if pathErr != nil {

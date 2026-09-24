@@ -24,7 +24,7 @@ func entry(snap service.Snapshot, id string) (service.Entry, error) {
 	return service.Entry{}, fmt.Errorf("job %q not found", id)
 }
 
-const pueueOutputHint = "Pueue captures stdout/stderr. View: pueue log or lazypueue."
+const pueueOutputHint = "Pueue task logs are separate from enqueue notices. View captured output: pueue log or lazypueue."
 
 func pueueFields(ctx context.Context, s *service.Service, host string) []ui.FieldUpdate {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -56,8 +56,12 @@ func addExecution(root *cobra.Command, o *options) {
 		}
 		recipe, e := service.LoadRecipe(j)
 		if e != nil {
-			return e
+			if cmd.Flags().Changed("runner") || cmd.Flags().Changed("group") {
+				return fmt.Errorf("cannot override an unverified recipe: %w; rebuild the job explicitly before changing its runner", e)
+			}
+			recipe = service.Recipe{Runner: "direct", Original: j.Command}
 		}
+		metadataErr := e
 		if recipe.Runner == "" {
 			recipe.Runner = "direct"
 		}
@@ -67,7 +71,7 @@ func addExecution(root *cobra.Command, o *options) {
 		if cmd.Flags().Changed("group") {
 			recipe.Group = group
 		}
-		spec := runFormSpec(s, snap, j, recipe, cmd.Flags().Changed("runner") || cmd.Flags().Changed("group") && recipe.Runner == "pueue")
+		spec := runFormSpec(s, snap, j, recipe, cmd.Flags().Changed("runner") || cmd.Flags().Changed("group") && recipe.Runner == "pueue", metadataErr)
 		build := spec.Build
 		values := map[string]string{"runner": recipe.Runner, "group": recipe.Group}
 		if o.interactive {

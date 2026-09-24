@@ -122,10 +122,12 @@ func (s *Service) checkRecipe(ctx context.Context, e Entry, r Recipe, pending *M
 	if r.ScriptTask != nil && r.ScriptTask.Preset == "uv-project" {
 		paths = append(paths, pathCheck{"project", filepath.Join(r.ScriptTask.Project, "pyproject.toml"), "readable"})
 	}
-	for _, pair := range []struct{ field, value string }{{"output", r.Output}, {"stderr", r.Stderr}} {
-		if pair.value != "" {
-			p, _ := resolveTargetPath(pair.value, base, home)
-			paths = append(paths, pathCheck{pair.field, p, "output"})
+	if EffectiveOutputPolicy(r) == OutputFiles {
+		for _, pair := range []struct{ field, value string }{{"output", r.Output}, {"stderr", r.Stderr}} {
+			if pair.value != "" {
+				p, _ := resolveTargetPath(pair.value, base, home)
+				paths = append(paths, pathCheck{pair.field, p, "output"})
+			}
 		}
 	}
 	args := []string{"sh", "-c", `set -eu; while [ "$#" -ge 3 ]; do field=$1; p=$2; kind=$3; shift 3; ok=no; case "$kind" in directory) [ -d "$p" ] && [ -x "$p" ] && ok=yes;; readable) [ -f "$p" ] && [ -r "$p" ] && ok=yes;; executable) [ -f "$p" ] && [ -x "$p" ] && ok=yes;; output) if [ -e "$p" ]; then [ -f "$p" ] && [ -w "$p" ] && ok=yes; else d=$(dirname "$p"); [ -d "$d" ] && [ -w "$d" ] && ok=yes; fi;; esac; printf '%s\000%s\000' "$field" "$ok"; done`, "lazycrontab-check"}
