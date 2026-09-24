@@ -4,9 +4,22 @@ Understand and manage cron jobs from a Go CLI and terminal dashboard, locally or
 
 Linux and macOS are supported. Remote hosts use their existing `crontab` and POSIX tools; no remote lazycrontab agent is required. Supercronic files are explicit additional sources. System crontabs are read-only.
 
-## Build and run
+## Install and run
 
-Requires Go **1.26.6+**. These commands install this development checkout; no public tag or release is assumed.
+Requires Go **1.26.6+**. The first source release is **v0.1.0**. Versioned
+installation requires the repository and tag to be published on GitHub:
+
+```sh
+go install github.com/daviddwlee84/lazycrontab@v0.1.0
+lazycrontab --version
+```
+
+For subsequent source releases, `go install github.com/daviddwlee84/lazycrontab@latest`
+selects the latest published release tag, not necessarily the latest main-branch
+commit. Install locations follow `GOBIN`, or `GOPATH/bin`; ensure that directory
+is on PATH (`go env GOBIN GOPATH`). v0.1.0 uses versioned Go source installation.
+
+To build a local checkout instead:
 
 ```sh
 go build -o lazycrontab .
@@ -14,6 +27,10 @@ go build -o lazycrontab .
 go install .                 # GOBIN, or GOPATH/bin; ensure it is on PATH
 go env GOBIN GOPATH
 ```
+
+Checkout builds report `dev`; version-qualified `go install` reports its module
+version. See [the changelog](CHANGELOG.md) for release contents and
+[completion and upgrades](#completion-and-upgrades) for shell setup and updates.
 
 No config file is needed for the local user's crontab. Launch never installs a scheduler or starts a daemon.
 
@@ -345,7 +362,7 @@ Mutating commands still validate the actual target and revision when executed.
 Local file flags use ordinary filename completion; target-side paths do not
 suggest unrelated files on your workstation.
 
-Source-tag upgrades build an exact stable release with an installed compatible Go toolchain, verify module/version, then atomically replace the resolved running copy, including relocated installations. Verified Homebrew ownership delegates to the owning brew. Development/modified builds and unsupported managers are preserved. Upgrading never installs Go or upgrades cron/Pueue. Public install/upgrade verification requires a published tag; private file-backed Go proxy fixtures validate the implementation meanwhile.
+Source-tag upgrades build an exact stable release with an installed compatible Go toolchain, verify module/version, then atomically replace the resolved running copy, including relocated installations. Verified Homebrew ownership delegates to the owning brew. Development/modified builds and unsupported managers are preserved. Upgrading never installs Go or upgrades cron/Pueue. Versioned source installation needs a published tag; `upgrade --check` also needs a stable GitHub Release because it reads the repository's latest-release endpoint. Local source-proxy verification is distinct from a successful public installation; see [verification evidence](docs/verification.md).
 
 ## Development
 

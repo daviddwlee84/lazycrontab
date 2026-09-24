@@ -2,6 +2,28 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## v0.1.0 source-release preparation
+
+The committed implementation at `bce52b0` passed an exact-source installation
+check using Go 1.26.6 and a private file-backed Go module proxy. Installing
+`github.com/daviddwlee84/lazycrontab@v0.1.0` recovered `v0.1.0` from Go build
+metadata without linker injection. Version/help, all five embedded concept
+topics, fixed-UTC schedule JSON and all four completion generators passed;
+Bash/Zsh scripts passed syntax checks. Native backend marker calls remained zero.
+A clean Git source archive also built successfully, with its ordinary checkout
+build correctly reporting `dev`.
+
+The inspected module ZIP contained 129 files: 554,539 compressed bytes and
+1,638,002 uncompressed bytes. Existing tracked SpecStory files were included
+(633,261 uncompressed bytes); no evidence files were untracked or rewritten.
+These numbers describe the implementation snapshot before the release-document
+commit. Final tag verification uses its committed source tree separately.
+
+This was an offline release-contract check, not a public installation. At this
+preparation step no Git remote was configured and the intended GitHub repository
+was not reachable. Public fixed-tag/latest installation, hosted CI and the
+GitHub latest-release upgrade check require repository/tag/release publication.
+
 ## Stable form rows and navigation revision
 
 The full race suite, vet and source build passed on macOS arm64 and Linux arm64

@@ -2,31 +2,26 @@
 
 ## Unreleased
 
-- Unify form ↑↓ navigation, reserve stable conditional-field positions, and anchor job popups while switching task types or runners; retain inactive drafts without letting them affect execution plans.
+## v0.1.0 — 2026-09-24
 
-- Resize Advanced job popups and reveal newly expanded fields; remove Alt view-switching shortcuts and make mouse capture a config-only preference, enabled by default.
+Initial source release for Linux and macOS; requires Go 1.26.6 or newer.
 
-- Show Add/Edit job drafts and their nested editors in dashboard popups.
+### Features
 
-- Keep review/save results in dashboard popups with highlighted diffs, clear job status changes and human-readable receipts.
-- Simplify native Pueue task payloads and use its working-directory option without a duplicate `cd`.
+- Manage local and SSH user crontabs and explicit Supercronic files through a shared CLI/TUI; inspect system sources read-only.
+- Review exact changes before writing, preserve unrelated document bytes, create original-content backups, detect stale sources and verify saved content.
+- Add/edit jobs in stable popups with consistent ↑↓ field navigation, ←→ choices, conditional input positions, mouse controls and readable results.
+- Explain cron schedules, edit individual fields, generate supported schedules in Playground, transfer them into new jobs, and forecast a weekly grid or agenda.
+- Run one-line commands or existing executable/Shell/Python/uv scripts; author managed multiline shell scripts with immutable target-side versions.
+- Submit scheduled tasks through native Pueue 4.x, select existing groups, retain explicit redirects and distinguish queued work from completed execution.
+- View raw sources with `v`; edit private copies with `V` or `sources edit-raw`, retaining invalid drafts for repair and using the normal review/backup path.
+- Discover configured SSH aliases, optionally import dev host inventory, authenticate through native SSH and browse target-side paths without executing scripts.
+- Configure XDG storage, themes, keys and mouse capture; access embedded concept help and offline shell completion for commands, options and target-specific IDs.
+- Check for source updates and update the resolved installed binary; respect verified package-manager ownership and preserve development builds.
 
-- Complete positional host/source/job/backup IDs and option values through native shell completion, with offline target-scoped job candidates and real Zsh Tab coverage.
+### Release boundaries
 
-- Add raw source viewing (`v`) and reviewed editor handoff (`V`), with exact CLI export/replacement, line diagnostics and retained invalid drafts for repair.
-
-- Distinguish one-line commands, existing files and managed shell content; show human execution summaries before raw cron diffs.
-- Add multiline managed script drafts, external-editor support, target XDG storage and immutable versions shared safely with cron/Pueue.
-
-- Redesign the dashboard with colored focus/status, responsive panes, clickable navigation and complete form controls.
-- Keep Playground and shared job workflows in-process; add per-field cron editing, inline diagnostics, presets and direct transfer into an add draft.
-- Replace bare host configuration forms with searchable SSH alias selection, optional typed dev inventory and native authentication/retry.
-- Add script/runtime/project pickers, Shell/Python/uv presets, read-only execution checks and shared CLI/TUI concept help.
-- Preserve drafts across help/view changes, reject stale workflow replies and reconcile partial apply outcomes; keep signal handling under one owner.
-
-- Add Linux/macOS CLI/TUI for user crontabs, SSH fleet, Supercronic files and read-only system sources.
-- Preserve unedited document bytes; add identity/remarks, reviewed writes, backups and conflict detection.
-- Add readable schedules, dialect validation, finite English grammar, guided builder and playground.
-- Add weekly trigger density and exact agenda views with timezone/DST handling.
-- Add explicit script editing, manual runs, logs, Pueue groups and native redirect wrappers.
-- Add XDG settings, configurable bindings, completion, SSH authentication and source/Homebrew upgrade ownership checks.
+- Native cron/files remain authoritative. lazycrontab does not install a scheduler, daemon or remote agent.
+- Pueue execution needs its CLI and daemon on the selected host. Forecasts describe configuration-derived trigger times, not execution history.
+- Native crontab has no atomic compare-and-swap with external editors. Uncertain writes require reconciliation; they are never retried automatically.
+- Public source installation requires a published tag; source update discovery additionally requires a stable GitHub Release. Binary archives and a Homebrew formula are not part of this initial source release.
