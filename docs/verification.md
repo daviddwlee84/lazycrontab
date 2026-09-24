@@ -2,6 +2,27 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Raw source revision
+
+The full race suite, vet and source build passed on macOS arm64 and Linux arm64
+(Go 1.26.6 in a disposable container). `scripts/pty_raw_source.py` passed on both:
+exact local/SSH stdout and JSON content, comments/environment/CRLF/tab retention,
+empty sources, read-only system sources, selection in All, both scroll axes,
+search text ownership, modal mouse containment, resize, editor terminal handoff,
+default-No review, cancellation, original backups and exact read-back. The
+existing general and managed-script PTY harnesses also passed on macOS.
+
+The new raw PTY cases reopen the same invalid private draft, verify its original
+bad bytes remain, then repair/discard or repair/review/apply. A fixture concurrent
+source change is rejected. Unit tests verify unsupported old lines may be retained
+without introducing new malformed lines, duplicate metadata is rejected, raw edits
+do not allocate IDs or rewrite sidecars, and uncertain writes do not retry. A
+three-second validator fuzz smoke completed 89,352 executions without failure.
+
+Actual remote hosts and cron/Supercronic daemons were not changed or exercised.
+The editor validates the supported cron dialect, not arbitrary shell program
+correctness; system `crontab` remains the final installer for native sources.
+
 ## Managed shell script revision
 
 The complete race suite, vet, source build and both PTY harnesses passed on macOS

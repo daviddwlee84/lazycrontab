@@ -40,6 +40,7 @@ The dashboard uses colored focus, selection and status indicators. Wide terminal
 | `x` / `d` | Review enable/disable / removal |
 | `r` | Review a manual run, optionally through Pueue |
 | `E` / `L` | Edit an explicit script / inspect logs |
+| `v` / `V` | View / edit the complete raw source |
 | `1` / `2` / `3` | Jobs / Week / Playground |
 | `Alt+1` / `Alt+2` / `Alt+3` | Switch views while editing; preserve the draft |
 | `F1` | Concepts and practical help (outside the cron editor) |
@@ -55,6 +56,22 @@ Effective bindings drive both help and dispatch. Printable characters belong to 
 
 Forms use Tab/Shift+Tab, arrows or clickable controls for choices, `Ctrl+P`/Browse for target paths and `Ctrl+O` for advanced settings. Enter on Schedule opens the shared cron editor; F1 opens contextual concepts and returns to the same draft. `Ctrl+S` prepares a review; **`y` or another Ctrl+S applies, Enter does not approve**. Esc returns to the draft or cancels a standalone confirmation. Results remain visible until acknowledged. Job/source forms and host selection stay inside the dashboard; external editors and native SSH temporarily take terminal ownership.
 
+`v` opens the selected source's original document, including comments and environment
+assignments. Use ↑↓/j/k or PgUp/PgDn to scroll, ←→/h/l for long lines, `/` to find,
+`n`/`N` for matches, `c` to copy the original bytes to the terminal clipboard, and
+Esc to return. The viewer is a read-only snapshot; reopen it to refresh. Its
+display adds line numbers and expands tabs, while the source and clipboard stay
+unchanged. In All, these actions target the selected job's source; with no selected
+job, choose a host/source first. A specifically selected empty source also works.
+
+`V` opens a private copy in `$VISUAL`/`$EDITOR`, even for SSH sources, then shows
+the whole-source diff before Apply. Invalid input reports line numbers and lets
+you reopen the same draft. Saving unchanged content does nothing. Comments,
+formatting and job order are preserved exactly; raw editing does not add job IDs.
+The normal revision check, original backup and read-back verification still apply.
+Changing a command or metadata ID can invalidate its helper recipe. System and
+configured read-only sources allow viewing only. Supercronic reload stays separate.
+
 Week starts on Monday. Arrows select a day/hour; Enter opens exact agenda rows; PgUp/PgDn pages; `[` / `]` changes weeks. UTC offsets distinguish repeated DST times. Counts and agenda are bounded and label truncation. These are forecast triggers, not execution history. Pueue jobs show enqueue times; execution may wait in the queue.
 
 Playground is a persistent tab, sharing the cron editor and parser with job forms. Each box represents one cron field: `*/5`, `1,15` and ranges fit inside a box. F1–F4 switch fields, presets, limited English phrases and macros. Errors explain the affected field; incomplete drafts remain editable. Paste a complete expression to populate matching boxes. Press **u / Use in new job** to open an add draft with the expression filled in; returning preserves the experiment. Copy and preview do not install a job. While editing, numbers are text: use Alt+1/2/3, clickable tabs, or Esc followed by a view shortcut.
@@ -67,6 +84,9 @@ Tabs, fields, selectors, action buttons, week cells, agenda rows and help suppor
 lazycrontab list --host all --source all --json
 lazycrontab show JOB_ID --json
 lazycrontab export > my-crontab.txt
+lazycrontab sources show
+lazycrontab --host lab sources edit-raw
+lazycrontab sources edit-raw --file ./my-crontab.txt --dry-run
 lazycrontab add --name backup --when 'daily at 03:00' \
   --command '/home/me/bin/backup' --remark 'Database backup' --dry-run
 lazycrontab add --name backup --schedule '0 3 * * *' \
@@ -90,6 +110,11 @@ lazycrontab overview --host all --source all --week 2026-09-21 --json
 `all` aggregates reads; mutations require one host/source. List supplies job IDs. Unmanaged entries use revision-sensitive line references until their first managed edit adds a stable ID.
 
 Bare add/edit, host/source forms and schedule build open wizards in a terminal. Partial business flags with missing required data fail unless `--interactive` is explicit. Global flags such as `--config` and `--host` alone do not suppress a wizard. Invalid flags/schedules fail before prompting. Pipes and JSON never prompt; use `--yes` after reviewing `--dry-run`.
+
+`sources show` prints exact original bytes (or source metadata plus content with
+`--json`). `sources edit-raw --file LOCAL_FILE` previews or installs a complete
+replacement document; combine it with `--dry-run` or `--yes` for automation.
+`sources edit ID` continues to edit the registration, not the source contents.
 
 Data uses stdout and diagnostics stderr. Exit codes: 0 success, 1 operation failure, 2 usage/config error, 130 cancellation. Direct CLI run failures preserve ordinary child exit codes. Successful Pueue submission means queued, not completed.
 

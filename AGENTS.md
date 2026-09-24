@@ -15,6 +15,7 @@ Checks:
 - `go build -o /tmp/lazycrontab-dev .`
 - `python3 scripts/pty_smoke.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_managed.py /tmp/lazycrontab-dev`
+- `python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev`
 
 Use isolated XDG roots and fixture backends. Never modify the developer's actual
 crontab or submit real Pueue jobs as a smoke test. The PTY harness requires only
@@ -49,6 +50,12 @@ Apply publishes and verifies the script under the source lock before installing
 cron. Never overwrite or prune an old version: queued tasks/backups may use it.
 Managed script editing goes through the job plan, not SaveScript. Multiline form
 values must bypass textinput sanitization; preserve tabs/line endings via F4.
+
+Raw source actions are v/V; sources show/edit-raw share the same snapshot/plan
+services. sources edit still edits registration. Raw replacement keeps bytes and
+does not re-render jobs or create IDs. New invalid syntax is rejected with line
+diagnostics; unchanged unknown lines can be retained with warnings. Editor repair
+keeps the original snapshot revision; failed writes never trigger automatic retry.
 
 XDG preferences, metadata and state are separate on both OSes. Helper sidecars
 are bound to command digests; native cron/Pueue works without lazycrontab. Upgrade

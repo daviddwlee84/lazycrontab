@@ -333,6 +333,7 @@ func addHosts(root *cobra.Command, o *options) {
 func addSources(root *cobra.Command, o *options) {
 	group := &cobra.Command{Use: "sources", Short: "Manage user crontab and file source registrations"}
 	root.AddCommand(group)
+	addRawSourceCommands(group, o)
 	group.AddCommand(&cobra.Command{Use: "list", Args: exactArgs(0), RunE: func(cmd *cobra.Command, _ []string) error {
 		c, e := o.load()
 		if e != nil {

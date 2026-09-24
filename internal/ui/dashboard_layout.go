@@ -59,7 +59,11 @@ func (m *dashboard) footerButtons() [][2]string {
 		return [][2]string{{"prev-week", "Previous ["}, {"next-week", "Next ]"}, {"agenda", "Agenda Enter"}, {"help", "Help ?"}}
 	}
 	var out [][2]string
-	for _, id := range []string{"add", "edit", "run", "logs", "authenticate"} {
+	ids := []string{"add", "edit", "run", "logs", "authenticate", "view-source"}
+	if m.focus == 0 {
+		ids = []string{"view-source", "edit-source", "host-add", "source-add", "authenticate"}
+	}
+	for _, id := range ids {
 		for _, a := range m.actions {
 			if a.ID == id && m.available(a) {
 				if id == "authenticate" {

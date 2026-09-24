@@ -2,6 +2,14 @@
 
 The root main package is installable. `internal/cli` constructs requests and presents results. `internal/ui` owns Bubble Tea state, shared forms/reviews, the schedule editor and host picker. A workflow factory mounts the same job/source forms in the dashboard or a standalone CLI. Playground is a persistent child model; Use transfers a schedule into an add draft. External editor, native SSH and third-party tool handoffs release terminal ownership.
 
+Raw source viewing is an owned, read-only snapshot model with independent scroll
+and search. Its edit event binds the viewed host/source, rather than a mutable
+dashboard selection. Whole-source editing uses a local 0600 draft and the shared
+PlanRawSource/Apply path. Syntax validation examines all proposed lines, including
+lines the job parser cannot understand; unchanged unsupported lines may be retained
+with warnings. Repair reopens the same draft against the original revision. No raw
+edit automatically creates IDs, rewrites helper metadata or deletes script files.
+
 `internal/document` retains source bytes and changes selected entries. `internal/schedule` validates dialects and computes descriptions/future matches without starting a scheduler. `internal/service` implements snapshots, plans, writes, backups, scripts, execution and forecasts. `internal/transport` invokes native tools locally or through a quoted OpenSSH boundary. `internal/config` implements XDG/typed TOML; `internal/upgrade` owns executable upgrades only.
 
 Write path: snapshot → plan/diff → review → revision check → private original-content backup → native install/regular-file replacement → read-back receipt. A client-side source lock coordinates cooperating processes, not external editors or other workstations. Unknown outcomes are reconciled before retry.

@@ -31,6 +31,26 @@ func (o *options) workflow(ctx context.Context, r ui.WorkflowRequest) (tea.Model
 		return newChangeModel(ctx, service.New(c), r)
 	case "guide":
 		return ui.NewHelpBrowser("", c.Mouse), nil
+	case "view-source":
+		source, err := c.Source(r.Host, r.Source)
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := service.New(c).Snapshot(ctx, r.Host, r.Source)
+		if err != nil {
+			return nil, err
+		}
+		actions, err := ui.Actions(c.Keys)
+		if err != nil {
+			return nil, err
+		}
+		editKey := "V"
+		for _, a := range actions {
+			if a.ID == "edit-source" {
+				editKey = a.Key
+			}
+		}
+		return ui.NewSourceView(snapshot, source, c.Theme, c.Mouse, editKey), nil
 	}
 	return nil, fmt.Errorf("unknown workflow %q", r.Action)
 }

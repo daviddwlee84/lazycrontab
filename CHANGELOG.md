@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add raw source viewing (`v`) and reviewed editor handoff (`V`), with exact CLI export/replacement, line diagnostics and retained invalid drafts for repair.
+
 - Distinguish one-line commands, existing files and managed shell content; show human execution summaries before raw cron diffs.
 - Add multiline managed script drafts, external-editor support, target XDG storage and immutable versions shared safely with cron/Pueue.
 

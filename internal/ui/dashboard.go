@@ -27,6 +27,7 @@ var defaultActions = []action{
 	{"add", "n", "Add job", false}, {"edit", "e", "Edit job", true}, {"remove", "d", "Remove job", true}, {"toggle", "x", "Enable / disable", true}, {"run", "r", "Run now", true}, {"script", "E", "Edit script", true}, {"logs", "L", "Read logs", true},
 	{"refresh", "ctrl+r", "Refresh", false}, {"jobs", "1", "Jobs", false}, {"week", "2", "Week overview", false}, {"playground", "3", "Playground", false}, {"host-add", "a", "Add host", false}, {"source-add", "s", "Add source", false}, {"authenticate", "A", "Authenticate SSH", false}, {"queue", "Q", "Open lazypueue", false}, {"config", "C", "Edit config", false}, {"reload", "R", "Reload source", false},
 	{"guide", "f1", "Concepts and guides", false},
+	{"view-source", "v", "View raw source", false}, {"edit-source", "V", "Edit raw source", false},
 }
 
 func Actions(keys map[string]string) ([]action, error) {
@@ -303,12 +304,15 @@ func (m *dashboard) scopeTarget() (string, string) {
 	return "local", "user"
 }
 func (m *dashboard) handoff(args ...string) tea.Cmd {
+	host, source := m.scopeTarget()
+	return m.handoffTarget(host, source, args...)
+}
+func (m *dashboard) handoffTarget(host, source string, args ...string) tea.Cmd {
 	exe, e := os.Executable()
 	if e != nil {
 		m.status = e.Error()
 		return nil
 	}
-	host, source := m.scopeTarget()
 	flags := []string{"--host", host, "--source", source}
 	if m.configPath != "" {
 		flags = append(flags, "--config", m.configPath)
@@ -334,6 +338,16 @@ func (m *dashboard) available(a action) bool {
 	src, err := m.service.Config.Source(host, source)
 	if err != nil {
 		return false
+	}
+	if a.ID == "view-source" || a.ID == "edit-source" {
+		if m.scope == 0 {
+			if _, ok := m.current(); !ok {
+				return false
+			}
+		}
+		if a.ID == "edit-source" && (src.ReadOnly || src.Kind == "system") {
+			return false
+		}
 	}
 	if a.ID == "queue" && (!m.queueAvailable || host != "local" && h.LazypueueConnection == "") {
 		return false
@@ -371,6 +385,15 @@ func (m *dashboard) act(id string) tea.Cmd {
 	m.palette = false
 	m.filter.Blur()
 	switch id {
+	case "view-source":
+		return m.openWorkflow("view-source", "")
+	case "edit-source":
+		if m.child != nil || m.childPending {
+			m.view = m.childView
+			m.status = "Close the current draft before editing a whole source."
+			return nil
+		}
+		return m.handoff("sources", "edit-raw")
 	case "add":
 		if m.factory != nil {
 			return m.openWorkflow("add", "")

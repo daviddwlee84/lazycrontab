@@ -74,7 +74,30 @@ func offsetMouse(msg tea.Msg, dy int) tea.Msg {
 // routeSurface leaves asynchronous snapshot messages with the dashboard while
 // the focused workflow owns keyboard, paste and mouse input.
 func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
+	if _, isSource := m.child.(*SourceView); isSource && m.childShowing() {
+		switch msg.(type) {
+		case tea.KeyPressMsg, tea.PasteMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
+			_, cmd := m.childInput(msg)
+			return true, cmd
+		}
+	}
 	switch v := msg.(type) {
+	case RawSourceEditMsg:
+		if m.child != v.Owner {
+			return true, nil
+		}
+		source, err := m.service.Config.Source(v.Host, v.Source)
+		if err != nil || source.ReadOnly || source.Kind == "system" {
+			v.Owner.editingRequested = false
+			v.Owner.status = "This source is read-only or no longer registered."
+			return true, nil
+		}
+		m.child = nil
+		if m.childCancel != nil {
+			m.childCancel()
+			m.childCancel = nil
+		}
+		return true, m.handoffTarget(v.Host, v.Source, "sources", "edit-raw")
 	case workflowReady:
 		if v.generation != m.childGeneration {
 			return true, nil

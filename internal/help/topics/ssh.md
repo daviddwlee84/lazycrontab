@@ -26,3 +26,14 @@ global OpenSSH password provider and is not read by lazycrontab.
 Remote timezone is detected when possible; an advanced override is available.
 Unknown timezone does not mean UTC. A source represents a user crontab or an
 explicit cron file; system sources remain read-only.
+
+Use v to inspect the selected source's original text and V to edit it through
+your local editor. SSH sources are downloaded as private drafts; changes reach
+the remote host only after the diff is approved. In All, the selected job chooses
+the source; choose a specific source to inspect an empty crontab. / finds text,
+arrows scroll/pan and Esc returns. Read-only sources cannot be edited.
+
+CLI: sources show prints original bytes; sources edit-raw opens the editor or
+uses --file LOCAL_FILE with --dry-run/--yes. sources edit changes registration.
+Changing a raw command may invalidate its helper recipe. Backups and source
+revision checks still apply; editing a Supercronic file does not reload it.
