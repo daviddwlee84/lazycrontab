@@ -319,7 +319,14 @@ def main():
             mark = session.mark(); session.send("yy")
             session.expect("Saved", mark)
             session.expect("Job disabled", mark)
-            session.expect("Target:", mark)
+            # Target/Job ID can occupy unchanged cells from the review, so an
+            # incremental render need not emit those bytes again. Repaint the
+            # completed receipt before checking its full human-readable data.
+            mark = session.mark(); session.resize(121, 40)
+            session.expect("Saved", mark)
+            session.expect("Job disabled", mark)
+            session.expect("Target: local/user", mark)
+            session.expect("Job ID: backup", mark)
             session.expect("Backup:", mark)
             result = session.output[mark:]
             assert b'"status"' not in result and b'"revision"' not in result and b'"backup"' not in result, "human result rendered a JSON receipt"
@@ -331,7 +338,7 @@ def main():
             assert writes() == 1
             mark = session.mark(); session.send(b"\r")
             session.pump(0.2)
-            session.resize(121, 40)
+            session.resize(120, 40)
             session.expect("Backup job", mark)
             session.expect("/ Backup", mark)
             session.expect("[ Add job n ]", mark)
@@ -358,7 +365,7 @@ def main():
             assert b'"status"' not in session.output[mark:], "failure rendered a JSON receipt"
             mark = session.mark(); session.send(b"\r")
             session.pump(0.2)
-            session.resize(120, 40)
+            session.resize(121, 40)
             session.expect("Backup job", mark)
             session.expect("/ Backup", mark)
             session.expect("[ Add job n ]", mark)
