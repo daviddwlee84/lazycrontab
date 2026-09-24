@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -109,11 +110,11 @@ func addExecution(root *cobra.Command, o *options) {
 	logs.Flags().StringVar(&logPath, "path", "", "Explicit target-side log path")
 	logs.Flags().IntVar(&lines, "lines", 200, "Tail lines (1..10000)")
 	root.AddCommand(logs)
-	scripts := &cobra.Command{Use: "script", Short: "Edit explicit job script files"}
+	scripts := &cobra.Command{Use: "script", Short: "Edit existing or managed job scripts"}
 	root.AddCommand(scripts)
 	var scriptPath string
 	edit := &cobra.Command{Use: "edit ID", Short: "Edit a private copy, then compare and save to the target", Args: exactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		if o.json || !tty() {
+		if !o.dry && (o.json || !tty()) {
 			return usage("script edit requires a terminal")
 		}
 		s, snap, e := o.snapshot(cmd)
@@ -128,10 +129,10 @@ func addExecution(root *cobra.Command, o *options) {
 			return fmt.Errorf("source is read-only")
 		}
 		path := scriptPath
+		r, recipeErr := service.LoadRecipe(j)
 		if path == "" {
-			r, e := service.LoadRecipe(j)
-			if e != nil {
-				return e
+			if recipeErr != nil {
+				return recipeErr
 			}
 			path = r.Script
 		}
@@ -140,6 +141,12 @@ func addExecution(root *cobra.Command, o *options) {
 		}
 		if o.dry {
 			return o.emit(cmd, map[string]string{"host": j.Host, "path": path}, j.Host+":"+path)
+		}
+		if recipeErr == nil && r.ManagedScript != nil && filepath.Clean(path) == filepath.Clean(r.Script) {
+			return o.editManagedScript(cmd, s, j, r)
+		}
+		if service.IsManagedScriptPath(path) {
+			return fmt.Errorf("managed script versions are immutable; edit the owning job with matching helper metadata")
 		}
 		draft, e := s.ScriptDraft(cmd.Context(), j.Host, path)
 		if e != nil {
@@ -191,6 +198,51 @@ func addExecution(root *cobra.Command, o *options) {
 		return transport.Interactive(exec.CommandContext(cmd.Context(), binary, args...))
 	}})
 }
+
+func (o *options) editManagedScript(cmd *cobra.Command, s *service.Service, j service.Entry, recipe service.Recipe) error {
+	before, err := s.ReadManagedScript(cmd.Context(), j, recipe)
+	if err != nil {
+		return err
+	}
+	// Capture the normal edit workflow before the editor is opened. Its source
+	// revision remains authoritative throughout the editor and review stages.
+	spec, values, err := newJobFormSpec(cmd.Context(), s, j.Host, j.Source, "edit", j.ID, nil)
+	if err != nil {
+		return err
+	}
+	if values["preset"] != "managed-shell" || values["script"] != recipe.Script || values["script_content"] != before {
+		return fmt.Errorf("managed script changed before editing; reload the job and try again")
+	}
+	draft, err := s.ScriptDraft(cmd.Context(), j.Host, recipe.Script)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(draft.File)
+	if draft.Before != before {
+		return fmt.Errorf("managed script content changed before editing")
+	}
+	if err = transport.Interactive(editor(draft.File)); err != nil {
+		return err
+	}
+	after, err := readManagedContentFile(draft.File)
+	if err != nil {
+		return err
+	}
+	if after == before {
+		return nil
+	}
+	values["script_content"] = after
+	review, err := spec.Build(cmd.Context(), values)
+	if err != nil {
+		return err
+	}
+	review.Text = "Script content changes\n" + service.Diff(before, after) + "\n\n" + review.Text
+	return o.approve(cmd, "Save managed script · "+j.Key(), review.Data.(jobReview).Plan, review.Text, func(ctx context.Context) (any, string, error) {
+		message, err := spec.Apply(ctx, values, review)
+		return map[string]any{"job_id": review.Data.(jobReview).Plan.JobID, "result": message}, message, err
+	})
+}
+
 func addBackup(root *cobra.Command, o *options) {
 	group := &cobra.Command{Use: "backup", Short: "Inspect and restore original source snapshots"}
 	root.AddCommand(group)

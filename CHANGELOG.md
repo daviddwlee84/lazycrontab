@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Distinguish one-line commands, existing files and managed shell content; show human execution summaries before raw cron diffs.
+- Add multiline managed script drafts, external-editor support, target XDG storage and immutable versions shared safely with cron/Pueue.
+
 - Redesign the dashboard with colored focus/status, responsive panes, clickable navigation and complete form controls.
 - Keep Playground and shared job workflows in-process; add per-field cron editing, inline diagnostics, presets and direct transfer into an add draft.
 - Replace bare host configuration forms with searchable SSH alias selection, optional typed dev inventory and native authentication/retry.

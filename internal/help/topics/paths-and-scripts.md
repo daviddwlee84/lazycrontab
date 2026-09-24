@@ -1,6 +1,19 @@
 # Paths and script presets
 
-    Choose target -> Choose script -> Runtime and directory -> Schedule -> Review
+    Choose target -> Command, file or managed content -> Schedule -> Review
+
+For `echo "hi"` or a pipeline, choose Shell command (one line). There is no
+script filename to manage. Existing shell script means an actual file path.
+Review shows your original command and runner before the exact crontab diff.
+
+For multiple lines, choose Managed shell script (write content). Enter opens the
+content editor; Enter inside adds a newline, Ctrl+S/Esc returns to the draft.
+F4 uses your external editor and preserves exact tabs or line endings. Apply
+stores a private version in the selected host's XDG data directory and installs
+the cron entry. Remote scripts live remotely. Edits create new version paths;
+old versions remain for queued Pueue tasks and backups. No automatic pruning
+occurs, and preview/cancel creates no script files. CLI equivalents accept
+--script-content or --script-content-file; the latter reads a local input file.
 
 A script's absolute filename and its working directory solve different problems.
 `/srv/report/jobs/daily.py` identifies a file; opening `./data/input.csv` inside

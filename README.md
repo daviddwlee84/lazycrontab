@@ -128,6 +128,39 @@ Supercronic saving and reload have separate results. For example, configure `rel
 
 ## Scripts, execution and helpers
 
+For a one-line command such as `echo "hi"`, choose **Shell command (one line)**.
+No script file is needed. **Existing shell script** instead expects a filename
+such as `/srv/jobs/hello.sh`; entering `echo "hi"` there would mean a file with
+that name. Review now shows the task type and original command before the exact
+generated crontab diff.
+
+```sh
+lazycrontab add --name hello --when 'every minute' \
+  --command 'echo "hi"' --runner pueue --group default --interactive
+```
+
+Every minute is `* * * * *` (or the Every minute preset); `@minutes` is not a
+supported cron macro.
+
+For multiple lines, choose **Managed shell script (write content)**. Enter opens
+the content editor; Enter inside it inserts a newline, and Ctrl+S/Esc returns to
+the draft. F4 opens `$VISUAL`/`$EDITOR`, including when exact tabs or line endings
+need preserving. No filename is required. Apply saves a private script version
+under the selected host's XDG data directory (`~/.local/share/lazycrontab/scripts/`
+by default), then installs the reviewed cron entry. Editing creates another
+version, leaving existing queued Pueue tasks and backups able to use their old one.
+
+```sh
+lazycrontab add --when 'every minute' --script-content-file ./commands.sh \
+  --runner pueue --group default --dry-run
+lazycrontab edit JOB_ID --script-content-file ./updated-commands.sh --interactive
+lazycrontab script edit JOB_ID
+```
+
+The content file above is local input; over SSH the managed version is stored on
+the remote account. Review/cancel never publishes it. Old versions are retained
+after edits and removal; automatic pruning is not performed.
+
 The add wizard offers executable/shebang, Shell, Python, uv project and uv standalone presets. Choose the target-side script, then browse detected runtimes and projects; working-directory defaults and read-only findings appear in the draft. Python virtualenvs use their interpreter directly, without activation. uv project flags are generated from your selection.
 
 ```sh

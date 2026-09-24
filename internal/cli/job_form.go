@@ -41,6 +41,71 @@ func sourceDialect(src config.Source) schedule.Dialect {
 	return schedule.System
 }
 
+var presetLabels = map[string]string{
+	"command":       "Shell command (one line)",
+	"executable":    "Existing executable script",
+	"shell":         "Existing shell script",
+	"python":        "Existing Python script",
+	"uv-project":    "Existing script in a uv project",
+	"uv-script":     "Existing standalone uv script",
+	"managed-shell": "Managed shell script (write content)",
+}
+
+func jobPresets() []string {
+	return append(append([]string(nil), service.ScriptPresets...), "managed-shell")
+}
+
+func validJobPreset(preset string) bool {
+	return preset == "managed-shell" || service.ValidPreset(preset)
+}
+
+func describeJobExecution(r service.Recipe, command string) string {
+	preset := "command"
+	if r.ScriptTask != nil {
+		preset = r.ScriptTask.Preset
+	}
+	if r.ManagedScript != nil {
+		preset = "managed-shell"
+	}
+	lines := []string{"Task: " + presetLabels[preset]}
+	if preset == "command" {
+		lines = append(lines, "Command: "+command)
+	} else {
+		lines = append(lines, "Script file: "+r.Script)
+		if r.ScriptTask.Runtime != "" {
+			lines = append(lines, "Interpreter: "+r.ScriptTask.Runtime)
+		}
+		if r.ScriptTask.Project != "" {
+			lines = append(lines, "Project: "+r.ScriptTask.Project)
+		}
+		if len(r.ScriptTask.Args) > 0 {
+			lines = append(lines, "Arguments: "+transport.Join(r.ScriptTask.Args))
+		}
+	}
+	if r.Runner == "pueue" {
+		group := r.Group
+		if group == "" {
+			group = "default"
+		}
+		lines = append(lines, "Runner: Pueue · group "+group)
+	} else {
+		lines = append(lines, "Runner: cron directly")
+	}
+	if r.Directory != "" {
+		lines = append(lines, "Working directory: "+r.Directory)
+	}
+	if r.Runner == "pueue" && r.Output == "" && r.Stderr == "" {
+		lines = append(lines, "Output: captured by Pueue")
+	}
+	if r.Output != "" {
+		lines = append(lines, "Output file: "+r.Output)
+	}
+	if r.Stderr != "" {
+		lines = append(lines, "Error output file: "+r.Stderr)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func recipeValues(j document.Job, r service.Recipe) map[string]string {
 	v := map[string]string{"schedule": j.Schedule, "command": j.Command, "name": j.Name, "remark": j.Remark, "enabled": fmt.Sprint(j.Enabled), "runner": r.Runner, "group": r.Group, "directory": r.Directory, "output": r.Output, "stderr": r.Stderr, "script": r.Script, "log": r.Log, "preset": "command", "runtime": "", "project": "", "args": "", "environment": ""}
 	if r.ScriptTask != nil {
@@ -48,6 +113,9 @@ func recipeValues(j document.Job, r service.Recipe) map[string]string {
 		v["runtime"] = r.ScriptTask.Runtime
 		v["project"] = r.ScriptTask.Project
 		v["args"] = transport.Join(r.ScriptTask.Args)
+	}
+	if r.ManagedScript != nil {
+		v["preset"] = "managed-shell"
 	}
 	keys := make([]string, 0, len(r.Environment))
 	for k := range r.Environment {
@@ -101,21 +169,49 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		r.Runner = "direct"
 	}
 	values := recipeValues(j, r)
+	verifiedManagedBody := false
+	if op == "edit" && r.ManagedScript != nil {
+		_, replaceCommand := overrides["command"]
+		_, replaceBody := overrides["script_content"]
+		if !replaceCommand && !replaceBody {
+			saved, _ := snap.Document.Find(id)
+			values["script_content"], err = s.ReadManagedScript(ctx, service.Entry{Job: saved, Host: host, Source: source, Dialect: snap.Document.Dialect}, r)
+			if err != nil {
+				return ui.FormSpec{}, nil, fmt.Errorf("read managed script: %w; provide --script-content-file to replace it or --command to switch to a command", err)
+			}
+			verifiedManagedBody = true
+		}
+	}
 	if op == "add" && values["schedule"] == "" {
 		values["schedule"] = "0 9 * * *"
 	}
 	values["host"] = host
 	values["source"] = source
+	initialValues := make(map[string]string, len(values))
+	for key, value := range values {
+		initialValues[key] = value
+	}
 	if _, replace := overrides["command"]; replace {
 		values["preset"] = "command"
 		values["runtime"] = ""
 		values["project"] = ""
 		values["args"] = ""
+		if r.ManagedScript != nil {
+			values["script"] = ""
+			values["script_content"] = ""
+		}
 	}
 	for k, v := range overrides {
 		values[k] = v
 	}
 	build := func(ctx context.Context, v map[string]string) (ui.Review, error) {
+		executionUnchanged := op == "edit"
+		for _, key := range []string{"command", "runner", "group", "directory", "output", "stderr", "script", "log", "preset", "runtime", "project", "args", "environment", "script_content"} {
+			if v[key] != initialValues[key] {
+				executionUnchanged = false
+				break
+			}
+		}
 		targetHost, targetSource := host, source
 		if op == "add" {
 			if v["host"] != "" {
@@ -143,7 +239,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		if preset == "" {
 			preset = "command"
 		}
-		if !service.ValidPreset(preset) {
+		if !validJobPreset(preset) {
 			return ui.Review{}, fmt.Errorf("unknown preset %q", preset)
 		}
 		if preset == "command" && strings.TrimSpace(job.Command) == "" {
@@ -181,19 +277,69 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			return ui.Review{}, err
 		}
 		recipe.ScriptTask = nil
+		recipe.ManagedScript = nil
+		var managedPlan *service.ManagedScriptPlan
+		entry := service.Entry{Job: job, Host: targetHost, Source: targetSource, Dialect: dialect}
+		if preset == "managed-shell" {
+			body := v["script_content"]
+			if strings.TrimSpace(body) == "" {
+				return ui.Review{}, fmt.Errorf("managed script content is required")
+			}
+			var prepared service.ManagedScriptPlan
+			if op == "edit" && r.ManagedScript != nil && r.ManagedScript.Digest == document.Digest(body) {
+				// Metadata-only edits retain the current native command even if
+				// XDG_DATA_HOME has changed or is unavailable. Apply inspects this
+				// stored path before any write; no new data root is consulted.
+				prepared = service.ManagedScriptPlan{Host: targetHost, Path: r.Script, Content: body, Digest: r.ManagedScript.Digest}
+			} else {
+				prepared, err = s.PrepareManagedScript(ctx, entry, body)
+				if err != nil {
+					return ui.Review{}, err
+				}
+			}
+			if verifiedManagedBody {
+				prepared.PreviousPath = r.Script
+				prepared.PreviousDigest = r.ManagedScript.Digest
+			}
+			managedPlan = &prepared
+			recipe.Script = prepared.Path
+			recipe.ManagedScript = &service.ManagedScript{Version: 1, Digest: prepared.Digest}
+			if recipe.Directory == "" {
+				recipe.Directory, err = s.ResolveTargetPath(ctx, targetHost, "", "")
+				if err != nil {
+					return ui.Review{}, err
+				}
+			}
+		} else if preset == "command" && r.ManagedScript != nil && v["script"] == r.Script {
+			// Returning to a one-line command must not retain a hidden managed
+			// script association from the previous draft.
+			recipe.Script = ""
+		}
 		if preset != "command" {
 			args, err := splitArgs(v["args"])
 			if err != nil {
 				return ui.Review{}, fmt.Errorf("argument quoting is incomplete")
 			}
-			recipe.ScriptTask = &service.ScriptTask{Version: 1, Preset: preset, Runtime: v["runtime"], Project: v["project"], Args: args}
+			scriptPreset, runtime := preset, v["runtime"]
+			if preset == "managed-shell" {
+				scriptPreset = "shell"
+				if runtime == "" {
+					runtime = "/bin/sh"
+				}
+			}
+			recipe.ScriptTask = &service.ScriptTask{Version: 1, Preset: scriptPreset, Runtime: runtime, Project: v["project"], Args: args}
 		}
-		entry := service.Entry{Job: job, Host: targetHost, Source: targetSource, Dialect: dialect}
-		recipe, err = s.ResolveScriptRecipe(ctx, entry, recipe)
-		if err != nil {
-			return ui.Review{}, err
+		if executionUnchanged {
+			// Metadata and schedule edits must not silently rebind a pinned
+			// runtime/Pueue executable or rebuild wrappers after SHELL changes.
+			recipe = r
+		} else {
+			recipe, err = s.ResolveScriptRecipe(ctx, entry, recipe)
+			if err != nil {
+				return ui.Review{}, err
+			}
 		}
-		if recipe.Runner == "pueue" {
+		if recipe.Runner == "pueue" && !executionUnchanged {
 			caps := s.Capabilities(ctx, targetHost)
 			if !caps.Ready {
 				return ui.Review{}, fmt.Errorf("Pueue unavailable: %s", caps.Error)
@@ -209,15 +355,21 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			}
 			recipe.PueuePath = caps.PueuePath
 		}
-		job.Command, err = service.Compile(entry, recipe)
-		if err != nil {
-			return ui.Review{}, err
+		if executionUnchanged {
+			saved, _ := snap.Document.Find(id)
+			job.Command = saved.Command
+		} else {
+			job.Command, err = service.Compile(entry, recipe)
+			if err != nil {
+				return ui.Review{}, err
+			}
 		}
 		entry.Job = job
 		plan, err := s.Plan(ctx, current, id, &job, op)
 		if err != nil {
 			return ui.Review{}, err
 		}
+		plan.ManagedScript = managedPlan
 		zone := current.Timezone
 		if value := job.Environment["CRON_TZ"]; value != "" && (dialect == schedule.Supercronic || src.CronTZ) {
 			zone = value
@@ -226,14 +378,24 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		if loc, e := time.LoadLocation(zone); e == nil && zone != "" {
 			if sc, e := schedule.Parse(job.Schedule, dialect, loc, c.Locale); e == nil {
 				next, _ := sc.NextN(ctx, time.Now(), 5)
-				preview = sc.Description + " · " + zone + "\n" + pretty(next)
+				lines := []string{sc.Description + " · " + zone}
+				for _, at := range next {
+					lines = append(lines, "Next: "+at.Format("Mon 2006-01-02 15:04:05 -07:00"))
+				}
+				preview = strings.Join(lines, "\n")
 			}
 		}
 		checks := ""
-		if recipe.ScriptTask != nil || recipe.Script != "" || recipe.Directory != "" || recipe.Output != "" || recipe.Stderr != "" {
+		if managedPlan != nil {
+			checks = "\n\n" + s.CheckManagedRecipe(ctx, entry, recipe, *managedPlan).Text()
+		} else if recipe.ScriptTask != nil || recipe.Script != "" || recipe.Directory != "" || recipe.Output != "" || recipe.Stderr != "" {
 			checks = "\n\n" + s.CheckRecipe(ctx, entry, recipe).Text()
 		}
-		return ui.Review{Text: targetHost + " / " + targetSource + "\n" + preview + "\n" + plan.Diff + "\n" + strings.Join(plan.Warnings, "\n") + checks, Data: jobReview{plan, recipe, entry}}, nil
+		scriptPreview := ""
+		if managedPlan != nil {
+			scriptPreview = "\n\nManaged script content\n" + managedPlan.Content + "\nSaved only when you Apply; previous versions are retained."
+		}
+		return ui.Review{Text: targetHost + " / " + targetSource + "\n" + describeJobExecution(recipe, v["command"]) + "\n\nSchedule: " + job.Schedule + "\n" + preview + scriptPreview + checks + "\n\nCrontab changes\n" + plan.Diff + "\n" + strings.Join(plan.Warnings, "\n"), Data: jobReview{plan, recipe, entry}}, nil
 	}
 	apply := func(ctx context.Context, _ map[string]string, review ui.Review) (string, error) {
 		data := review.Data.(jobReview)
@@ -288,9 +450,10 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 	}
 	fields = append(fields,
 		ui.Field{Key: "name", Label: "Name"},
-		ui.Field{Key: "preset", Label: "What to run", Options: service.ScriptPresets, Hint: "command: shell line · executable: shebang · shell/Python: explicit interpreter · uv: project or standalone"},
-		ui.Field{Key: "command", Label: "Shell command", Show: func(v map[string]string) bool { return v["preset"] == "command" }},
-		ui.Field{Key: "script", Label: "Script on selected host", Show: showScript, Pick: jobPathPicker(s, chosenHost, "script", false)},
+		ui.Field{Key: "preset", Label: "What to run", Options: jobPresets(), OptionLabels: presetLabels, Hint: "Shell command needs no file. Choose Managed shell script to write multiple lines without managing a path."},
+		ui.Field{Key: "command", Label: "Command to execute (e.g. echo \"hi\")", Hint: "A shell command runs directly; no script file is needed.", Show: func(v map[string]string) bool { return v["preset"] == "command" }},
+		ui.Field{Key: "script", Label: "Existing script file on selected host", Hint: "Enter a file path, e.g. ./job.sh. For echo \"hi\", choose Shell command.", Show: func(v map[string]string) bool { return showScript(v) && v["preset"] != "managed-shell" }, Pick: jobPathPicker(s, chosenHost, "script", false)},
+		ui.Field{Key: "script_content", Label: "Script content · Enter to edit", Kind: "multiline", Hint: "Write shell commands; lazycrontab saves a private version on the selected host only after Apply.", Show: func(v map[string]string) bool { return v["preset"] == "managed-shell" }},
 		ui.Field{Key: "runtime", Label: "Interpreter / uv executable (Browse to choose)", Show: func(v map[string]string) bool { return showScript(v) && v["preset"] != "executable" }, Pick: jobRuntimePicker(s, chosenHost)},
 		ui.Field{Key: "project", Label: "Python project (Browse to choose)", Show: func(v map[string]string) bool { return v["preset"] == "uv-project" }, Pick: jobProjectPicker(s, chosenHost)},
 		ui.Field{Key: "directory", Label: "Working directory (script presets suggest a default)", Pick: jobPathPicker(s, chosenHost, "directory", true)},
@@ -335,7 +498,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			fields[i].Value = value
 		}
 	}
-	spec := ui.FormSpec{Title: op + " job · " + host + " / " + source, Fields: fields, Mouse: c.Mouse, Theme: c.Theme, Build: build, Apply: apply, ScheduleContext: contextFor, LoadKeys: []string{"host", "source", "runner", "preset", "script", "project", "directory", "runtime", "output", "stderr"}}
+	spec := ui.FormSpec{Title: op + " job · " + host + " / " + source, Fields: fields, Mouse: c.Mouse, Theme: c.Theme, Build: build, Apply: apply, TextEditor: editor, ScheduleContext: contextFor, LoadKeys: []string{"host", "source", "runner", "preset", "script", "project", "directory", "runtime", "output", "stderr"}}
 	spec.Load = func(ctx context.Context, v map[string]string) []ui.FieldUpdate {
 		h := chosenHost(v)
 		srcID := chosenSource(v)
@@ -386,6 +549,22 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 
 func jobScriptUpdates(ctx context.Context, s *service.Service, host, source string, v map[string]string, environment map[string]string) []ui.FieldUpdate {
 	preset := v["preset"]
+	if preset == "managed-shell" {
+		updates := []ui.FieldUpdate{{Key: "script_content", Hint: "Managed on " + host + "; previewing or cancelling creates no file."}}
+		if v["runtime"] == "" {
+			runtime := "/bin/sh"
+			updates = append(updates, ui.FieldUpdate{Key: "runtime", Value: &runtime, Hint: "Runs with /bin/sh by default; choose a different shell if your script needs it."})
+		}
+		if v["directory"] == "" {
+			directory, err := s.ResolveTargetPath(ctx, host, "", "")
+			if err != nil {
+				updates = append(updates, ui.FieldUpdate{Key: "directory", Hint: err.Error()})
+			} else {
+				updates = append(updates, ui.FieldUpdate{Key: "directory", Value: &directory, Hint: "Your script's relative files resolve here; independent of managed storage."})
+			}
+		}
+		return updates
+	}
 	if preset == "" || preset == "command" || strings.TrimSpace(v["script"]) == "" {
 		return nil
 	}
@@ -540,6 +719,9 @@ func jobRuntimePicker(s *service.Service, host func(map[string]string) string) f
 			return nil, err
 		}
 		kind := v["preset"]
+		if kind == "managed-shell" {
+			kind = "shell"
+		}
 		if strings.HasPrefix(kind, "uv-") {
 			kind = "uv"
 		}

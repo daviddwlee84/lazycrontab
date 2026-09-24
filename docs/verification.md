@@ -2,6 +2,25 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Managed shell script revision
+
+The complete race suite, vet, source build and both PTY harnesses passed on macOS
+arm64 and on Linux arm64 with Go 1.26.6 in a disposable local container.
+`scripts/pty_managed.py` verifies inline multiline editing, ordinary Enter versus
+Done, draft/review cancellation without publication, 0600 target script files,
+Pueue command generation without submission, nested F4 terminal handoff, exact
+tabs from the external editor, immutable versions through job/script edits and
+read-only CLI previews. Every terminal session checks mode restoration.
+
+Service/CLI regressions cover local and simulated SSH XDG resolution, private
+file creation without changing user data-root permissions, symlink refusal,
+original-body freshness during editing, source changes during publication,
+partial/unknown writes, existing-version corruption, stored-path retention after
+XDG changes, and metadata-only edits that preserve pinned execution even if
+SHELL or Pueue availability changes. Script bodies were never executed by these
+checks. Managed scripts in actual remote hosts or Supercronic containers have
+not been exercised; the selected target filesystem must be available at runtime.
+
 ## UI/UX revision
 
 The revised code passed the complete race suite and vet on macOS arm64, and

@@ -14,6 +14,7 @@ Checks:
 - `go vet ./...`
 - `go build -o /tmp/lazycrontab-dev .`
 - `python3 scripts/pty_smoke.py /tmp/lazycrontab-dev`
+- `python3 scripts/pty_managed.py /tmp/lazycrontab-dev`
 
 Use isolated XDG roots and fixture backends. Never modify the developer's actual
 crontab or submit real Pueue jobs as a smoke test. The PTY harness requires only
@@ -41,6 +42,13 @@ Host discovery is static OpenSSH alias inventory or typed dev JSON, not shared
 credential/config storage. Script presets and read-only checks never execute
 user scripts or install dependencies. Generated arguments are percent-encoded
 once for native cron. Preserve legacy recipes and stored commands on default Run.
+
+Managed shell bodies are saved under the selected host's XDG data directory as
+immutable content-addressed versions. Review/dry-run creates no target files.
+Apply publishes and verifies the script under the source lock before installing
+cron. Never overwrite or prune an old version: queued tasks/backups may use it.
+Managed script editing goes through the job plan, not SaveScript. Multiline form
+values must bypass textinput sanitization; preserve tabs/line endings via F4.
 
 XDG preferences, metadata and state are separate on both OSes. Helper sidecars
 are bound to command digests; native cron/Pueue works without lazycrontab. Upgrade

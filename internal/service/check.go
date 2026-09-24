@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,16 @@ func (r CheckReport) Text() string {
 // CheckRecipe reports observed file/runtime facts without running the job or
 // loading startup files. Failed/unavailable checks remain distinct from passed.
 func (s *Service) CheckRecipe(ctx context.Context, e Entry, r Recipe) CheckReport {
+	return s.checkRecipe(ctx, e, r, nil)
+}
+
+// CheckManagedRecipe checks the planned runtime and working directory without
+// reporting the reviewed, not-yet-created script as a missing dependency.
+func (s *Service) CheckManagedRecipe(ctx context.Context, e Entry, r Recipe, p ManagedScriptPlan) CheckReport {
+	return s.checkRecipe(ctx, e, r, &p)
+}
+
+func (s *Service) checkRecipe(ctx context.Context, e Entry, r Recipe, pending *ManagedScriptPlan) CheckReport {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	report := CheckReport{Host: e.Host, Source: e.Source, JobID: e.ID, Directory: r.Directory, Findings: []Finding{}, EnvironmentSource: "Cron defaults plus crontab variables; interactive shell startup files are not loaded."}
@@ -52,6 +63,30 @@ func (s *Service) CheckRecipe(ctx context.Context, e Entry, r Recipe) CheckRepor
 	}
 	add := func(code, severity, field, message, suggestion string) {
 		report.Findings = append(report.Findings, Finding{code, severity, field, message, suggestion})
+	}
+	if pending != nil {
+		err := validateManagedPlan(e, *pending)
+		if err == nil {
+			err = validateManagedRecipe(e, r)
+		}
+		if err == nil && (r.Script != pending.Path || r.ManagedScript.Digest != pending.Digest) {
+			err = fmt.Errorf("managed script recipe does not match the reviewed content")
+		}
+		if err != nil {
+			add("managed-plan-invalid", "error", "script", err.Error(), "Review the script again.")
+			return report
+		}
+		add("managed-script-planned", "info", "script", "Managed script version will be created or verified: "+pending.Path, "Its content is reviewed before saving; no script is executed by these checks.")
+	} else if r.ManagedScript != nil {
+		if _, err := s.ReadManagedScript(ctx, e, r); err != nil {
+			severity := "unknown"
+			if errors.Is(err, errManagedIntegrity) {
+				severity = "error"
+			}
+			add("managed-script-integrity", severity, "script", err.Error(), "Inspect the target script before scheduling or editing it.")
+		} else {
+			add("managed-script-integrity", "ok", "script", "Managed script matches its reviewed content digest.", "")
+		}
 	}
 	h, base, home, err := s.targetBase(ctx, e.Host)
 	if err != nil {
@@ -73,7 +108,7 @@ func (s *Service) CheckRecipe(ctx context.Context, e Entry, r Recipe) CheckRepor
 	report.Directory = base
 	type pathCheck struct{ field, path, kind string }
 	paths := []pathCheck{{"directory", base, "directory"}}
-	if r.Script != "" {
+	if r.Script != "" && pending == nil {
 		p, _ := resolveTargetPath(r.Script, base, home)
 		kind := "readable"
 		if r.ScriptTask != nil && r.ScriptTask.Preset == "executable" {
@@ -112,13 +147,21 @@ func (s *Service) CheckRecipe(ctx context.Context, e Entry, r Recipe) CheckRepor
 		case "yes":
 			add("path-ready", "ok", p.field, p.field+": "+p.path, "")
 		case "no":
-			add("path-unavailable", "warning", p.field, p.field+" is not ready: "+p.path, "Choose an existing accessible path, adjust permissions, or save the job disabled until it is ready.")
+			suggestion := "Choose an existing accessible path, adjust permissions, or save the job disabled until it is ready."
+			if p.field == "script" && r.ScriptTask != nil {
+				suggestion += " To run a command such as echo instead of a file, choose Shell command (--command)."
+			}
+			add("path-unavailable", "warning", p.field, p.field+" is not ready: "+p.path, suggestion)
 		default:
 			add("path-unknown", "unknown", p.field, "Could not inspect "+p.path, "Retry the check.")
 		}
 	}
 	if r.ScriptTask == nil {
 		add("raw-command", "info", "command", "Shell command dependencies are not inferred.", "Use a script preset to check its runtime and working directory.")
+		return report
+	}
+	if pending != nil {
+		add("dependencies-unverified", "info", "runtime", "Commands and external services in the script have not been executed or verified.", "Use the separately reviewed Run action when you want to execute the job.")
 		return report
 	}
 	d, err := s.DiscoverScript(ctx, e.Host, r.Script)

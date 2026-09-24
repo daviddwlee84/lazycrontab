@@ -302,9 +302,9 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
         session=Session(binary,[*base,"add","--interactive","--name","PTY shell",
                                 "--preset","shell","--script",str(script),"--runtime","/bin/sh"],env,tmp,120,40)
         try:
-            session.expect("Script on selected host")
+            session.expect("Existing script file on selected host")
             mark=session.mark();session.click(110,10)
-            session.expect("Choose Script on selected host",mark)
+            session.expect("Choose Existing script file on selected host",mark)
             session.send("job.sh");session.pump(0.4)
             mark=session.mark();session.send(b"\r")
             session.expect("Draft only",mark)
@@ -315,9 +315,10 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             mark=session.mark();session.send("u")
             session.expect("add job",mark)
             mark=session.mark();session.send(b"\x13")
-            session.expect("proposed",mark)
-            session.send(b"\x1b[6~")
+            session.expect("Task: Existing shell script",mark)
             session.expect("Execution checks",mark)
+            session.send(b"\x1b[6~")
+            session.expect("proposed",mark)
             assert cron.read_text()==before,"script preflight saved or ran the job"
             assert not (root/"script-executed").exists(),"script preflight executed the user's script"
             session.send(b"\x1b");session.pump()

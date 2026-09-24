@@ -54,24 +54,27 @@ type Snapshot struct {
 	Document *document.Document `json:"-"`
 }
 type Plan struct {
-	Host      string   `json:"host"`
-	Source    string   `json:"source"`
-	Operation string   `json:"operation"`
-	Before    string   `json:"before"`
-	After     string   `json:"after"`
-	Revision  string   `json:"revision"`
-	Existed   bool     `json:"existed"`
-	JobID     string   `json:"job_id,omitempty"`
-	Diff      string   `json:"diff"`
-	Warnings  []string `json:"warnings,omitempty"`
+	Host          string             `json:"host"`
+	Source        string             `json:"source"`
+	Operation     string             `json:"operation"`
+	Before        string             `json:"before"`
+	After         string             `json:"after"`
+	Revision      string             `json:"revision"`
+	Existed       bool               `json:"existed"`
+	JobID         string             `json:"job_id,omitempty"`
+	Diff          string             `json:"diff"`
+	Warnings      []string           `json:"warnings,omitempty"`
+	ManagedScript *ManagedScriptPlan `json:"managed_script,omitempty"`
 }
 type Receipt struct {
-	Host     string `json:"host"`
-	Source   string `json:"source"`
-	Status   string `json:"status"`
-	Backup   string `json:"backup,omitempty"`
-	Revision string `json:"revision,omitempty"`
-	Message  string `json:"message,omitempty"`
+	Host         string `json:"host"`
+	Source       string `json:"source"`
+	Status       string `json:"status"`
+	Backup       string `json:"backup,omitempty"`
+	Revision     string `json:"revision,omitempty"`
+	Message      string `json:"message,omitempty"`
+	ScriptPath   string `json:"script_path,omitempty"`
+	ScriptStatus string `json:"script_status,omitempty"`
 }
 type Backup struct {
 	FilePath string    `json:"file_path,omitempty"`
@@ -361,9 +364,25 @@ func (s *Service) Apply(ctx context.Context, p Plan) (Receipt, error) {
 	if document.Digest(raw) != p.Revision || raw != p.Before || exists != p.Existed {
 		return r, fmt.Errorf("source changed since review; refresh and review again")
 	}
-	if p.Before == p.After {
+	if p.Before == p.After && p.ManagedScript == nil {
 		r.Status = "unchanged"
 		return r, nil
+	}
+	if p.ManagedScript != nil {
+		r.ScriptPath = p.ManagedScript.Path
+		entry := Entry{Host: p.Host, Source: p.Source, Job: document.Job{Metadata: document.Metadata{ID: p.JobID}}}
+		if e = validateManagedPlan(entry, *p.ManagedScript); e != nil {
+			r.ScriptStatus = "failed"
+			return r, e
+		}
+		if e = s.checkManagedPrevious(ctx, h, *p.ManagedScript); e != nil {
+			r.ScriptStatus = "failed"
+			return r, e
+		}
+		if _, _, e = s.inspectManagedPlan(ctx, h, *p.ManagedScript); e != nil {
+			r.ScriptStatus = "failed"
+			return r, e
+		}
 	}
 	if src.Kind == "file" && (src.Dialect == "" || src.Dialect == "supercronic") {
 		check, e := s.Runner.Run(ctx, h, []string{"sh", "-c", "if command -v supercronic >/dev/null 2>&1; then exec supercronic -test /dev/stdin; else exit 44; fi"}, []byte(p.After))
@@ -374,6 +393,35 @@ func (s *Service) Apply(ctx context.Context, p Plan) (Receipt, error) {
 	r.Backup, e = s.backup(p)
 	if e != nil {
 		return r, fmt.Errorf("backup failed; source unchanged: %w", e)
+	}
+	if p.ManagedScript != nil {
+		r.ScriptStatus, e = s.installManagedScript(ctx, h, *p.ManagedScript)
+		if e != nil {
+			if r.ScriptStatus == "unknown" {
+				r.Status = "unknown"
+			}
+			r.Message = "No crontab write was sent. The managed script may be present; inspect it before retrying."
+			return r, e
+		}
+		// Creating a script can take another SSH round-trip. Keep the source
+		// freshness check adjacent to its write rather than extending that race.
+		raw, exists, e = s.read(ctx, h, src)
+		if e != nil || raw != p.Before || exists != p.Existed {
+			r.Message = "No crontab write was sent. The verified managed script was retained at " + r.ScriptPath
+			if e != nil {
+				return r, fmt.Errorf("refresh source after saving script: %w", e)
+			}
+			return r, fmt.Errorf("source changed while preparing script; refresh and review again")
+		}
+		if e = s.checkManagedPrevious(ctx, h, *p.ManagedScript); e != nil {
+			r.Message = "No crontab write was sent. The verified new script was retained at " + r.ScriptPath
+			return r, e
+		}
+		if p.Before == p.After {
+			r.Status = r.ScriptStatus
+			r.Revision = p.Revision
+			return r, nil
+		}
 	}
 	if src.Kind == "user" {
 		_, e = s.Runner.Run(ctx, h, []string{"env", "LC_ALL=C", "crontab", "-"}, []byte(p.After))

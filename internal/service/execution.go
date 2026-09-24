@@ -29,6 +29,7 @@ type Recipe struct {
 	Script        string            `json:"script,omitempty"`
 	Log           string            `json:"log,omitempty"`
 	ScriptTask    *ScriptTask       `json:"script_task,omitempty"`
+	ManagedScript *ManagedScript    `json:"managed_script,omitempty"`
 	Environment   map[string]string `json:"environment,omitempty"`
 }
 type Capabilities struct {
@@ -148,6 +149,11 @@ func SplitPercent(raw string) (string, string) {
 }
 func cronEscape(s string) string { return strings.ReplaceAll(s, "%", "\\%") }
 func Compile(e Entry, r Recipe) (string, error) {
+	if r.ManagedScript != nil {
+		if err := validateManagedRecipe(e, r); err != nil {
+			return "", err
+		}
+	}
 	for name, path := range map[string]string{"directory": r.Directory, "output": r.Output, "stderr": r.Stderr, "script": r.Script, "log": r.Log} {
 		if path != "" && (!filepath.IsAbs(path) && !strings.HasPrefix(path, "~/") || strings.ContainsAny(path, "\r\n\x00")) {
 			return "", fmt.Errorf("%s must be an absolute target path or start with ~/", name)
@@ -503,6 +509,9 @@ func (s *Service) SaveScript(ctx context.Context, d ScriptDraft, after string) (
 	h, err := s.Config.Host(d.Host)
 	r := Receipt{Host: d.Host, Source: d.Path, Status: "failed"}
 	if err != nil {
+		return r, err
+	}
+	if err = s.refuseManagedScriptMutation(ctx, h, d.Path); err != nil {
 		return r, err
 	}
 	current, exists, err := s.read(ctx, h, config.Source{Kind: "file", Path: d.Path})

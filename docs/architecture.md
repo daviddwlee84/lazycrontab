@@ -16,4 +16,13 @@ Selection follows job identity; source scopes and Playground retain their contex
 
 Optional ScriptTask recipes produce quoted native commands with explicit runtime, paths, working directory and literal per-job environment. Generated payloads are encoded once for native cron percent rules. Script discovery and preflight inspect bounded files/directories without executing user code. Default manual Run uses the stored command; explicit runner overrides may recompile the matching recipe.
 
+Managed shell scripts attach an optional ManagedScriptPlan to the same source
+plan. Target XDG discovery and version inspection are read-only. Apply checks
+source/previous-script freshness under the source lock, backs up the source,
+publishes a private immutable script using a no-clobber hard link, verifies it,
+then checks freshness again before installing cron. Receipts report script and
+cron outcomes separately. Published versions remain on failure and after
+edit/remove because queued work and backups may still reference them. Editor
+handoffs use private local drafts; they never edit a managed version in place.
+
 Registered targets load with bounded concurrency. Pueue discovery is optional/asynchronous. Snapshots remain in memory. Persistent files are written only for explicit registration, mutation, authentication and observed manual-run results. No database, scheduler, daemon, remote agent or LLM is required.

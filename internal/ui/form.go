@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,7 @@ type Field struct {
 	Kind, Hint        string
 	Pick              func(context.Context, map[string]string) ([]PickOption, error)
 	Options           []string
+	OptionLabels      map[string]string
 	Advanced          bool
 	Unavailable       map[string]string
 	Show              func(map[string]string) bool
@@ -32,6 +34,14 @@ type FieldUpdate struct {
 	Hint        string
 	Schedule    *ScheduleEditorOptions
 }
+
+func (f Field) displayValue(value string) string {
+	if label, ok := f.OptionLabels[value]; ok {
+		return label
+	}
+	return value
+}
+
 type PickOption struct {
 	Label, Value string
 	Navigate     bool
@@ -51,6 +61,7 @@ type FormSpec struct {
 	Load            func(context.Context, map[string]string) []FieldUpdate
 	LoadKeys        []string
 	ScheduleContext func(map[string]string) ScheduleEditorOptions
+	TextEditor      func(string) *exec.Cmd
 }
 type FormResult struct {
 	Values    map[string]string
@@ -104,6 +115,8 @@ type Form struct {
 	applyDispatched              bool
 	finished                     bool
 	cancelRequested              bool
+	multilineValues              map[int]string
+	multiline                    *multilineDraft
 }
 type formLive struct {
 	generation int
@@ -145,7 +158,14 @@ func NewForm(ctx context.Context, spec FormSpec) *Form {
 	f := &Form{spec: spec, ctx: child, cancel: cancel, width: 80, height: 24, stage: "edit", dark: spec.Theme != "light"}
 	for _, field := range spec.Fields {
 		input := textinput.New()
-		input.SetValue(field.Value)
+		if field.Kind == "multiline" {
+			if f.multilineValues == nil {
+				f.multilineValues = map[int]string{}
+			}
+			f.multilineValues[len(f.inputs)] = field.Value
+		} else {
+			input.SetValue(field.Value)
+		}
 		input.Prompt = ""
 		input.SetWidth(60)
 		input.CharLimit = 65536
@@ -201,7 +221,7 @@ func (f *Form) queueLoad() tea.Cmd {
 func (f *Form) Values() map[string]string {
 	v := map[string]string{}
 	for i, field := range f.spec.Fields {
-		v[field.Key] = f.inputs[i].Value()
+		v[field.Key] = f.fieldValue(i)
 	}
 	return v
 }
@@ -342,6 +362,10 @@ func (f *Form) closeSchedule() tea.Cmd {
 }
 func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
+	case textEditorReady:
+		return f, f.launchTextEditor(m)
+	case textEditorResult:
+		return f, f.receiveTextEditor(m)
 	case formLoadTick:
 		if m.owner == f && m.generation == f.loadGeneration && f.stage == "edit" {
 			return f, f.startLoad()
@@ -350,6 +374,9 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		if f.spec.Theme == "" || f.spec.Theme == "auto" {
 			f.dark = m.IsDark()
+		}
+		if f.multiline != nil {
+			f.resizeMultiline()
 		}
 		return f, nil
 	case tea.WindowSizeMsg:
@@ -368,6 +395,9 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if f.help != nil {
 			f.help.Update(m)
+		}
+		if f.multiline != nil {
+			f.resizeMultiline()
 		}
 		return f, nil
 	case formBuilt:
@@ -410,8 +440,8 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						f.spec.Fields[i].Options = u.Options
 					}
 					f.spec.Fields[i].Unavailable = u.Unavailable
-					if u.Value != nil && f.inputs[i].Value() == f.loadValues[u.Key] {
-						f.inputs[i].SetValue(*u.Value)
+					if u.Value != nil && f.fieldValue(i) == f.loadValues[u.Key] {
+						f.setFieldValue(i, *u.Value)
 					}
 					f.spec.Fields[i].Hint = u.Hint
 					if u.Schedule != nil {
@@ -437,6 +467,9 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if f.picker != nil {
 		return f, f.updatePicker(msg)
+	}
+	if f.multiline != nil {
+		return f, f.updateMultiline(msg)
 	}
 	if f.schedule != nil {
 		switch m := msg.(type) {
@@ -582,6 +615,9 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			f.help.Update(tea.WindowSizeMsg{Width: f.width, Height: f.height})
 			return f, f.help.Init()
 		case "enter":
+			if len(f.inputs) > 0 && f.spec.Fields[f.focus].Kind == "multiline" {
+				return f, f.openMultiline()
+			}
 			if len(f.inputs) > 0 && f.spec.Fields[f.focus].Kind == "schedule" {
 				return f, f.openSchedule()
 			}
@@ -603,7 +639,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return f, nil
 		}
-		if len(f.inputs) > 0 && f.spec.Fields[f.focus].Kind == "schedule" {
+		if len(f.inputs) > 0 && (f.spec.Fields[f.focus].Kind == "schedule" || f.spec.Fields[f.focus].Kind == "multiline") {
 			return f, nil
 		}
 	}
@@ -673,6 +709,11 @@ func (f *Form) activate(id string) tea.Cmd {
 			f.focusField(index)
 			return f.openSchedule()
 		}
+		if strings.HasPrefix(id, "multiline:") {
+			fmt.Sscanf(id, "multiline:%d", &index)
+			f.focusField(index)
+			return f.openMultiline()
+		}
 		if strings.HasPrefix(id, "browse:") {
 			fmt.Sscanf(id, "browse:%d", &index)
 			f.focusField(index)
@@ -729,10 +770,13 @@ func (f *Form) hits() []hitRegion {
 			y := 2 + n*2
 			field := f.spec.Fields[i]
 			if len(field.Options) > 0 {
-				hits = append(hits, hitRegion{fmt.Sprintf("prev:%d", i), rect{2, y + 1, 2, 1}}, hitRegion{fmt.Sprintf("next:%d", i), rect{min(f.width-3, 5+ansi.StringWidth(safe(f.inputs[i].Value()))), y + 1, 2, 1}})
+				hits = append(hits, hitRegion{fmt.Sprintf("prev:%d", i), rect{2, y + 1, 2, 1}}, hitRegion{fmt.Sprintf("next:%d", i), rect{5 + ansi.StringWidth(safe(field.displayValue(f.inputs[i].Value()))), y + 1, 1, 1}})
 			}
 			if field.Kind == "schedule" {
 				hits = append(hits, hitRegion{fmt.Sprintf("schedule:%d", i), rect{2, y + 1, max(0, f.width-4), 1}})
+			}
+			if field.Kind == "multiline" {
+				hits = append(hits, hitRegion{fmt.Sprintf("multiline:%d", i), rect{2, y + 1, max(0, f.width-4), 1}})
 			}
 			if field.Pick != nil {
 				hits = append(hits, hitRegion{fmt.Sprintf("browse:%d", i), rect{max(2, f.width-12), y, 10, 1}})
@@ -766,6 +810,9 @@ func (f *Form) View() tea.View {
 	if f.picker != nil {
 		return f.pickerView()
 	}
+	if f.multiline != nil {
+		return f.multilineView()
+	}
 	t := styles(f.dark)
 	lines := []string{t.Title.Render(clip(f.spec.Title, f.width)), t.Muted.Render(clip("Tab next  ·  Shift+Tab back  ·  Ctrl+P browse", f.width))}
 	switch f.stage {
@@ -786,10 +833,18 @@ func (f *Form) View() tea.View {
 			lines = append(lines, clip(line, f.width))
 			value := f.inputs[i].View()
 			if len(field.Options) > 0 {
-				value = t.Accent.Render("◀ ") + safe(f.inputs[i].Value()) + t.Accent.Render(" ▶")
+				value = t.Accent.Render("◀ ") + safe(field.displayValue(f.inputs[i].Value())) + t.Accent.Render(" ▶")
 			}
 			if field.Kind == "schedule" {
 				value = t.Schedule.Render(safe(f.inputs[i].Value())) + t.Muted.Render("  [Edit schedule ↵]")
+			}
+			if field.Kind == "multiline" {
+				body := f.fieldValue(i)
+				summary := "Empty · Enter to write"
+				if body != "" {
+					summary = fmt.Sprintf("%d lines · Enter to edit", strings.Count(body, "\n")+1)
+				}
+				value = t.Schedule.Render(summary)
 			}
 			lines = append(lines, "  "+clip(value, max(1, f.width-3)))
 		}

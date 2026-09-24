@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -154,7 +156,9 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		{"directory", "", "Target working directory; script presets resolve relative paths"},
 		{"output", "", "Append stdout and, by default, stderr to this file"}, {"stderr", "", "Append stderr separately"},
 		{"script", "", "Target script path; metadata only with the command preset"}, {"log", "", "Explicit existing log path"},
-		{"preset", "command", "command, executable, shell, python, uv-project, or uv-script"},
+		{"preset", "command", "command, executable, shell, python, uv-project, uv-script, or managed-shell"},
+		{"script-content", "", "Shell script content managed on the selected host"},
+		{"script-content-file", "", "Local file containing shell script content to manage on the selected host"},
 		{"runtime", "", "Target interpreter/uv executable (script presets)"}, {"project", "", "Target Python project directory (uv-project preset)"},
 	} {
 		f.String(flag.name, flag.value, flag.help)
@@ -167,7 +171,7 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		if get("when") != "" && get("schedule") != "" {
 			return usage("choose --when or --schedule")
 		}
-		if !service.ValidPreset(get("preset")) {
+		if !validJobPreset(get("preset")) {
 			return usage("unknown preset %q", get("preset"))
 		}
 		if get("runner") != "direct" && get("runner") != "pueue" {
@@ -176,11 +180,36 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		if f.Changed("command") && f.Changed("preset") && get("preset") != "command" {
 			return usage("choose --command or a script --preset")
 		}
+		managedContent := f.Changed("script-content") || f.Changed("script-content-file")
+		if f.Changed("script-content") && f.Changed("script-content-file") {
+			return usage("choose --script-content or --script-content-file")
+		}
+		if managedContent && (f.Changed("script") || f.Changed("command")) {
+			return usage("managed script content cannot be combined with --script or --command")
+		}
+		if managedContent && f.Changed("preset") && get("preset") != "managed-shell" {
+			return usage("script content requires --preset managed-shell")
+		}
+		if get("preset") == "managed-shell" && f.Changed("script") {
+			return usage("managed-shell takes script content, not an existing --script path")
+		}
 		overrides := map[string]string{}
 		for _, key := range []string{"name", "schedule", "command", "remark", "runner", "group", "directory", "output", "stderr", "script", "log", "preset", "runtime", "project"} {
 			if f.Changed(key) {
 				overrides[key] = get(key)
 			}
+		}
+		if managedContent {
+			content := get("script-content")
+			if f.Changed("script-content-file") {
+				var err error
+				content, err = readManagedContentFile(get("script-content-file"))
+				if err != nil {
+					return err
+				}
+			}
+			overrides["preset"] = "managed-shell"
+			overrides["script_content"] = content
 		}
 		if f.Changed("disabled") {
 			disabled, _ := f.GetBool("disabled")
@@ -240,12 +269,15 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		if values["preset"] == "command" && (f.Changed("runtime") || f.Changed("project") || f.Changed("arg")) {
 			return usage("--runtime, --project and --arg require a script preset")
 		}
+		if values["preset"] == "managed-shell" && f.Changed("script") {
+			return usage("this job uses managed content; use --script-content-file, or explicitly choose an existing-file --preset with --script")
+		}
 		if wizard {
 			_, err = ui.RunForm(cmd.Context(), spec)
 			return err
 		}
 		if values["preset"] == "command" && values["command"] == "" {
-			return usage("--command is required, or choose --preset and --script; use --interactive for the wizard")
+			return usage("--command is required, or choose --preset and --script, or provide --script-content-file; use --interactive for the wizard")
 		}
 		review, err := spec.Build(cmd.Context(), values)
 		if err != nil {
@@ -257,4 +289,20 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		})
 	}
 	root.AddCommand(cmd)
+}
+
+func readManagedContentFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("read local script content: %w", err)
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, service.MaxManagedScriptBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read local script content: %w", err)
+	}
+	if len(content) > service.MaxManagedScriptBytes {
+		return "", usage("managed script content exceeds %d bytes", service.MaxManagedScriptBytes)
+	}
+	return string(content), nil
 }
