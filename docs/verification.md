@@ -2,6 +2,24 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Shell completion revision
+
+The full race suite, vet and source build passed on macOS arm64 and Linux arm64
+(Go 1.26.6 in a disposable container). The final CLI, completion-cache and service
+race checks also passed on both platforms after the last completion changes.
+`scripts/pty_completion.py` exercised actual Zsh Tab insertion on both: selected
+host/source IDs, cached job IDs, typed option values, prefix matching, missing or
+malformed config, and suppression of unrelated filename suggestions. Backend
+markers confirm that completion never invokes SSH, crontab, dev or Pueue; the
+harness also verifies terminal restoration and generated Zsh/Bash syntax.
+
+Unit tests cover cache freshness, target isolation, private minimal records,
+read-only completion callbacks, snapshot/write invalidation, bounded backup
+metadata reads and rejection of symlinks/FIFOs. Shell setup and fixtures remained
+isolated; the developer's shell startup files were not changed. Native Bash Tab,
+Fish and PowerShell completion were not exercised. Job candidates are advisory
+cached observations; executing a command still reads and validates its target.
+
 ## Raw source revision
 
 The full race suite, vet and source build passed on macOS arm64 and Linux arm64

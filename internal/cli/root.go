@@ -138,7 +138,7 @@ func newRoot(o *options) *cobra.Command {
 	completion := &cobra.Command{Use: "completion [bash|zsh|fish|powershell]", Short: "Generate shell completion without network access", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		switch args[0] {
 		case "bash":
-			return root.GenBashCompletion(cmd.OutOrStdout())
+			return root.GenBashCompletionV2(cmd.OutOrStdout(), true)
 		case "zsh":
 			return root.GenZshCompletion(cmd.OutOrStdout())
 		case "fish":
@@ -150,28 +150,7 @@ func newRoot(o *options) *cobra.Command {
 		}
 	}}
 	root.AddCommand(completion)
-	_ = root.RegisterFlagCompletionFunc("host", func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		c, e := config.Load(o.config)
-		if e != nil {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-		ids := []string{"all"}
-		for _, h := range c.AllHosts() {
-			ids = append(ids, h.ID)
-		}
-		return ids, cobra.ShellCompDirectiveNoFileComp
-	})
-	_ = root.RegisterFlagCompletionFunc("source", func(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
-		c, e := config.Load(o.config)
-		if e != nil {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-		ids := []string{"all"}
-		for _, s := range c.HostSources(o.hostID(c)) {
-			ids = append(ids, s.ID)
-		}
-		return ids, cobra.ShellCompDirectiveNoFileComp
-	})
+	configureCompletions(root, o)
 	return root
 }
 func (o *options) load() (config.Config, error) {

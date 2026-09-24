@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/daviddwlee84/lazycrontab/internal/completioncache"
 	"github.com/daviddwlee84/lazycrontab/internal/config"
 	"github.com/daviddwlee84/lazycrontab/internal/document"
 	"github.com/daviddwlee84/lazycrontab/internal/schedule"
@@ -154,6 +155,7 @@ func (s *Service) Snapshot(ctx context.Context, host, id string) (Snapshot, erro
 	defer cancel()
 	raw, exists, e := s.read(ctx, h, src)
 	if e != nil {
+		completioncache.Invalidate(s.Config, host, id)
 		return snap, e
 	}
 	snap.Exists = exists
@@ -207,7 +209,21 @@ func (s *Service) Snapshot(ctx context.Context, host, id string) (Snapshot, erro
 		}
 		snap.Entries = append(snap.Entries, entry)
 	}
+	if ctx.Err() == nil {
+		s.cacheJobs(host, id, snap.Document, src.ReadOnly || src.Kind == "system")
+	}
 	return snap, nil
+}
+
+func (s *Service) cacheJobs(host, source string, doc *document.Document, readOnly bool) {
+	entries := make([]completioncache.Entry, 0, len(doc.Jobs))
+	for _, job := range doc.Jobs {
+		if strings.HasPrefix(job.Diagnostic, "duplicate") {
+			continue
+		}
+		entries = append(entries, completioncache.Entry{ID: job.ID, Name: job.Name, Enabled: job.Enabled, ReadOnly: readOnly})
+	}
+	completioncache.Save(s.Config, host, source, entries)
 }
 func (s *Service) Targets(host, source string) [][2]string {
 	out := [][2]string{}
@@ -359,9 +375,11 @@ func (s *Service) Apply(ctx context.Context, p Plan) (Receipt, error) {
 	defer os.Remove(lock)
 	raw, exists, e := s.read(ctx, h, src)
 	if e != nil {
+		completioncache.Invalidate(s.Config, p.Host, p.Source)
 		return r, e
 	}
 	if document.Digest(raw) != p.Revision || raw != p.Before || exists != p.Existed {
+		completioncache.Invalidate(s.Config, p.Host, p.Source)
 		return r, fmt.Errorf("source changed since review; refresh and review again")
 	}
 	if p.Before == p.After && p.ManagedScript == nil {
@@ -423,6 +441,9 @@ func (s *Service) Apply(ctx context.Context, p Plan) (Receipt, error) {
 			return r, nil
 		}
 	}
+	// Completion must not suggest old IDs after a dispatched write whose
+	// outcome is unknown. A verified read-back below repopulates it locally.
+	completioncache.Invalidate(s.Config, p.Host, p.Source)
 	if src.Kind == "user" {
 		_, e = s.Runner.Run(ctx, h, []string{"env", "LC_ALL=C", "crontab", "-"}, []byte(p.After))
 	} else {
@@ -440,6 +461,14 @@ func (s *Service) Apply(ctx context.Context, p Plan) (Receipt, error) {
 	}
 	r.Status = "saved"
 	r.Revision = document.Digest(current)
+	dialect := schedule.Dialect(src.Dialect)
+	if dialect == "" {
+		dialect = schedule.System
+		if src.Kind == "file" {
+			dialect = schedule.Supercronic
+		}
+	}
+	s.cacheJobs(p.Host, p.Source, document.Parse(current, dialect, false), false)
 	return r, nil
 }
 func (s *Service) writeFile(ctx context.Context, h config.Host, path, before, after string, exists bool) error {

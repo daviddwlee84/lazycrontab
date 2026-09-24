@@ -20,6 +20,9 @@ jobs:
       - run: python3 scripts/pty_smoke.py /tmp/lazycrontab-dev
       - run: python3 scripts/pty_managed.py /tmp/lazycrontab-dev
       - run: python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - run: python3 scripts/pty_completion.py /tmp/lazycrontab-dev
   cross-build:
     runs-on: ubuntu-latest
     strategy:

@@ -373,6 +373,10 @@ func addEntity(parent *cobra.Command, o *options, kind, op string) {
 	var ssh, timezone, path, dialect, sourceKind, reload, pueue, connection, inventorySource string
 	var readOnly bool
 	cmd := &cobra.Command{Use: op + " [ID]", Short: op + " a " + kind + " registration", Args: cobra.MaximumNArgs(1)}
+	if op != "add" {
+		cmd.Use = op + " ID"
+		cmd.Args = exactArgs(1)
+	}
 	f := cmd.Flags()
 	f.StringVar(&timezone, "timezone", "", "IANA target timezone")
 	if kind == "hosts" {

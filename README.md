@@ -232,7 +232,7 @@ See [examples/config.toml](examples/config.toml). macOS and Linux both use XDG:
 | Config | `~/.config/lazycrontab/config.toml` | Preferences, hosts, sources, key bindings |
 | Data | `~/.local/share/lazycrontab/jobs/` | Optional helper recipes and script/log paths |
 | State | `~/.local/state/lazycrontab/` | Backups and manual-run records |
-| Cache | `~/.cache/lazycrontab/` | SSH references; snapshots otherwise remain in memory |
+| Cache | `~/.cache/lazycrontab/` | SSH references and minimal job-ID completion candidates |
 
 Absolute `XDG_*_HOME` variables override these roots; relative values are ignored. Reads and previews do not create directories. Explicit authentication, saves and observed manual runs create private state as needed. Files use 0600 and directories 0700.
 
@@ -246,15 +246,65 @@ See [cron compatibility](docs/compatibility.md) for dialect/time semantics.
 
 ## Completion and upgrades
 
+Completion includes command-specific arguments, not just command names and flags:
+
+| Input before Tab | Candidates |
+| --- | --- |
+| `lazycrontab sources edit ` | Source IDs on the selected host, including `user` |
+| `lazycrontab --host lab sources edit ` | Source IDs registered for `lab` |
+| `lazycrontab hosts edit ` | Saved host IDs and `local` |
+| `lazycrontab hosts authenticate ` | Saved SSH host IDs |
+| `lazycrontab edit ` / `show ` / `run ` | Recently observed job IDs for the selected host/source |
+| `lazycrontab backup restore ` | Existing local backup IDs |
+| `lazycrontab add --runner ` / `--preset ` | Supported values |
+
+`sources edit ID` edits registration settings. `sources edit-raw` edits the
+document selected through `--host`/`--source` and takes no positional ID.
+
+For the current Zsh session, after installing the binary on PATH:
+
+```zsh
+autoload -Uz compinit
+compinit                     # omit if your shell/framework already initialized it
+source <(lazycrontab completion zsh)
+```
+
+For persistent Zsh setup, generate `_lazycrontab` into a user-owned completion
+directory, put that directory in `fpath` **before** the shell/framework runs
+`compinit`, and open a new shell:
+
+```zsh
+mkdir -p ~/.zfunc
+lazycrontab completion zsh > ~/.zfunc/_lazycrontab
+# In your shell setup, before compinit / your framework:
+fpath=(~/.zfunc $fpath)
+```
+
+Do not regenerate the script on every shell startup. Existing native Zsh bridges
+query the invoked binary for candidates, so updating the binary supplies the
+new IDs; older Bash bridges should be regenerated for the dynamic V2 generator.
+Completion generation does not modify your shell startup files automatically.
+
 ```sh
-lazycrontab completion zsh > _lazycrontab
 lazycrontab completion bash > lazycrontab.bash
 lazycrontab completion fish > lazycrontab.fish
+lazycrontab completion powershell > lazycrontab.ps1
 lazycrontab upgrade --check --json
 lazycrontab upgrade --yes
 ```
 
-Load completion through your shell's normal directory (`fpath` on Zsh). Help/version/completion generation are offline.
+Bash uses its normal bash-completion setup; Fish and PowerShell use their usual
+completion-loading mechanisms. Candidate lookup is offline: Tab never connects
+to SSH, authenticates, starts a TUI, runs crontab or writes cache/config files.
+Host/source IDs come from local configuration. Job IDs/names come from a private,
+minimal completion cache populated by ordinary successful reads/writes; command
+text, script contents and environment values are not cached. Run
+`lazycrontab --host lab --source user list` explicitly to refresh remote candidates.
+Entries expire after 24 hours; changed target identity, missing or malformed
+settings yield no dynamic candidates rather than falling back to another host.
+Mutating commands still validate the actual target and revision when executed.
+Local file flags use ordinary filename completion; target-side paths do not
+suggest unrelated files on your workstation.
 
 Source-tag upgrades build an exact stable release with an installed compatible Go toolchain, verify module/version, then atomically replace the resolved running copy, including relocated installations. Verified Homebrew ownership delegates to the owning brew. Development/modified builds and unsupported managers are preserved. Upgrading never installs Go or upgrades cron/Pueue. Public install/upgrade verification requires a published tag; private file-backed Go proxy fixtures validate the implementation meanwhile.
 
@@ -266,6 +316,9 @@ go test -race ./...
 go vet ./...
 go build -o /tmp/lazycrontab-dev .
 python3 scripts/pty_smoke.py /tmp/lazycrontab-dev
+python3 scripts/pty_managed.py /tmp/lazycrontab-dev
+python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev
+python3 scripts/pty_completion.py /tmp/lazycrontab-dev  # requires zsh
 ```
 
 Tests use isolated configuration and fake cron/SSH/Pueue tools, never real user jobs. The PTY harness needs only Python's standard library. CI defines Ubuntu/macOS tests and PTY runs plus Linux/macOS amd64/arm64 builds.

@@ -56,6 +56,7 @@ func fixtureService(t *testing.T, raw string) (*Service, *fakeCron) {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	f := &fakeCron{raw: raw, exists: raw != ""}
 	s := New(config.Defaults())
 	s.Runner = f

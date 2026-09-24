@@ -16,6 +16,7 @@ Checks:
 - `python3 scripts/pty_smoke.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_managed.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev`
+- `python3 scripts/pty_completion.py /tmp/lazycrontab-dev` (requires zsh)
 
 Use isolated XDG roots and fixture backends. Never modify the developer's actual
 crontab or submit real Pueue jobs as a smoke test. The PTY harness requires only
@@ -61,6 +62,11 @@ XDG preferences, metadata and state are separate on both OSes. Helper sidecars
 are bound to command digests; native cron/Pueue works without lazycrontab. Upgrade
 the resolved installed copy, not a PATH shadow, and preserve development builds
 and package-owned installations outside their supported owner workflow.
+
+Shell completion is read-only/offline. Host/source IDs come from config; job IDs
+come from the bounded private completion cache populated by normal snapshots and
+verified writes. Do not call SSH/crontab or create state from completion callbacks.
+Cache keys include config and target identity, and omit command/script/env content.
 
 Maintain only verified project information here. See docs/architecture.md and
 docs/verification.md for boundaries and validation evidence.

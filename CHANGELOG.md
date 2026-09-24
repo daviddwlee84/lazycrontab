@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Complete positional host/source/job/backup IDs and option values through native shell completion, with offline target-scoped job candidates and real Zsh Tab coverage.
+
 - Add raw source viewing (`v`) and reviewed editor handoff (`V`), with exact CLI export/replacement, line diagnostics and retained invalid drafts for repair.
 
 - Distinguish one-line commands, existing files and managed shell content; show human execution summaries before raw cron diffs.
