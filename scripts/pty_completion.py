@@ -111,24 +111,30 @@ exec sh -c "$last"
         if bash:
             subprocess.run([bash, "-n", str(bash_completion)], env=env, check=True, capture_output=True)
 
-        with terminal(zsh, ["-f"], env, root) as session:
-            setup = (
-                f"fpath=({shlex.quote(str(functions))} $fpath); "
-                "autoload -Uz compinit; compinit -D; bindkey -e; "
-                "unsetopt beep; PS1='COMPLETE> '; "
-                "_capture_buffer() { zle -I; print -r -- \"__BUFFER_BEGIN__${BUFFER}__BUFFER_END__\"; "
-                "BUFFER=''; CURSOR=0; zle reset-prompt; }; "
-                "zle -N _capture_buffer; bindkey '^G' _capture_buffer; print '__COMPLETION_READY__'\n"
-            )
-            session.send(setup)
+        # Load setup from our private ZDOTDIR, never from typed input: otherwise
+        # the readiness marker can match the echoed command before compinit has
+        # finished. Only zle-line-init announces that the editor owns input.
+        (root / ".zshrc").write_text(
+            f"fpath=({shlex.quote(str(functions))} $fpath)\n"
+            # Ignore insecure inherited function directories; compinit's prompt
+            # must never consume the first character of a completion case.
+            "autoload -Uz compinit; compinit -i -D || exit; bindkey -e\n"
+            "unsetopt beep; PS1='COMPLETE> '\n"
+            "_capture_buffer() { zle -I; print -r -- \"__BUFFER_BEGIN__${BUFFER}__BUFFER_END__\"; "
+            "BUFFER=''; CURSOR=0; zle reset-prompt; }\n"
+            "zle -N _capture_buffer; bindkey '^G' _capture_buffer\n"
+            "_completion_ready() { zle -I; print -r -- '__COMPLETION_READY__'; }\n"
+            "zle -N zle-line-init _completion_ready\n"
+        )
+        # -d skips global startup files; HOME/ZDOTDIR both name the fixture.
+        with terminal(zsh, ["-d", "-i"], env, root) as session:
             session.expect("__COMPLETION_READY__")
-            session.pump(0.3)
 
             def complete(line, expected):
-                mark = session.mark()
-                session.send(line + "\t")
-                session.pump(0.15)
-                session.send(b"\x07")
+                mark = len(session.output)
+                # ZLE processes capture after the preceding real Tab widget
+                # returns, even when candidate discovery is slow.
+                session.send(line + "\t\x07")
                 session.expect("__BUFFER_END__", mark)
                 matches = re.findall(rb"__BUFFER_BEGIN__(.*?)__BUFFER_END__", session.output[mark:], re.S)
                 assert matches, session.output[mark:]
