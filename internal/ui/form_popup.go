@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,7 +35,12 @@ func (f *Form) draftPopupLayout() draftPopupLayout {
 	} else if width >= 16 {
 		margin = 1
 	}
-	w, h := min(108, max(1, width-margin*2)), min(30, height)
+	w := min(108, max(1, width-margin*2))
+	desired := max(18, len(f.visible())*2+12)
+	if f.popupEditorHeight > 0 {
+		desired = f.popupEditorHeight
+	}
+	h := min(desired, height)
 	if height >= 16 {
 		h = min(h, height-2)
 	}
@@ -49,11 +55,54 @@ func (f *Form) draftPopupLayout() draftPopupLayout {
 func (f *Form) popupPanel() (rect, string) {
 	if f.DraftPopupActive() {
 		l := f.draftPopupLayout()
-		panel := bordered("Job draft · Alt+1/2/3 switch views", strings.Split(f.View().Content, "\n"), l.box.w, l.box.h, true, f.dark)
+		panel := bordered("Job draft", strings.Split(f.View().Content, "\n"), l.box.w, l.box.h, true, f.dark)
 		return l.box, panel
 	}
 	l := f.modalLayout()
 	return l.box, f.modalPanel()
+}
+
+func (f *Form) reflowDraft() {
+	if f.stage != "edit" || f.finished {
+		return
+	}
+	visible := f.visible()
+	layout := fmt.Sprint(visible)
+	if f.visibleLayout != layout {
+		f.visibleLayout = layout
+		f.clearPopupPress()
+	}
+	if len(visible) > 0 {
+		nearest := visible[0]
+		distance := len(f.inputs) + 1
+		for _, index := range visible {
+			delta := index - f.focus
+			if delta < 0 {
+				delta = -delta
+			}
+			if delta < distance {
+				nearest, distance = index, delta
+			}
+		}
+		if nearest != f.focus {
+			f.focusField(nearest)
+		}
+	}
+	if !f.DraftPopupActive() {
+		return
+	}
+	nested := f.schedule != nil || f.picker != nil || f.help != nil || f.multiline != nil
+	if nested && f.popupEditorHeight == 0 {
+		// Freeze a roomy editing surface while child tools are open. Late
+		// suggestions may change the draft's field count without moving them.
+		f.popupEditorHeight = max(30, len(visible)*2+12)
+	} else if !nested {
+		f.popupEditorHeight = 0
+	}
+	inner := f.draftPopupLayout().inner
+	if f.width != inner.w || f.height != inner.h {
+		f.resizeForm(f.canvasWidth, f.canvasHeight)
+	}
 }
 
 func (f *Form) resizeForm(width, height int) {

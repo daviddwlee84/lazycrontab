@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestXDGAndReadOnlyLoad(t *testing.T) {
@@ -71,5 +73,71 @@ func TestValidationRejectsWrongDialectAndRelativeSource(t *testing.T) {
 		if c.Validate() == nil {
 			t.Fatal(src)
 		}
+	}
+}
+
+func TestMousePreferenceDefaultsOnlyWhenOmitted(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", base)
+	for _, name := range []string{"LAZYCRONTAB_CONFIG", "LAZYCRONTAB_HOST", "LAZYCRONTAB_SOURCE", "LAZYCRONTAB_LOCALE"} {
+		t.Setenv(name, "")
+	}
+	if !Defaults().Mouse {
+		t.Fatal("mouse must be enabled in the built-in defaults")
+	}
+	missing, err := Load("")
+	if err != nil || !missing.Mouse {
+		t.Fatal("missing XDG config did not keep the default", missing.Mouse, err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "lazycrontab")); !os.IsNotExist(err) {
+		t.Fatal("loading default mouse preference created a config", err)
+	}
+	for _, test := range []struct {
+		name, content string
+		want          bool
+	}{
+		{"omitted", "# mouse inherits the default\ntheme = 'dark'\n", true},
+		{"explicit false", "mouse = false\n", false},
+		{"explicit true", "mouse = true\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Load(path)
+			if err != nil || loaded.Mouse != test.want {
+				t.Fatal("explicit bool was overwritten by defaults", loaded.Mouse, err)
+			}
+			// This is the same serialization and private atomic write used by
+			// config initialization. False must remain present in the TOML.
+			encoded, err := toml.Marshal(loaded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assignment := "mouse = false"
+			if test.want {
+				assignment = "mouse = true"
+			}
+			if !strings.Contains(string(encoded), assignment) {
+				t.Fatalf("mouse preference omitted during serialization: %s", encoded)
+			}
+			saved := filepath.Join(t.TempDir(), "saved", "config.toml")
+			if err := AtomicWrite(saved, encoded, 0600); err != nil {
+				t.Fatal(err)
+			}
+			roundTrip, err := Load(saved)
+			if err != nil || roundTrip.Mouse != test.want {
+				t.Fatal("mouse preference changed across save/load", roundTrip.Mouse, err)
+			}
+			// A later explicit false must replace either an omitted/default true
+			// or a previously loaded value when the configuration is re-read.
+			if err := AtomicWrite(saved, []byte("mouse = false\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if reloaded, err := Load(saved); err != nil || reloaded.Mouse {
+				t.Fatal("explicit false lost on reload", reloaded.Mouse, err)
+			}
+		})
 	}
 }

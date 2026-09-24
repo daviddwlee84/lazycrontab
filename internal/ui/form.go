@@ -120,6 +120,8 @@ type Form struct {
 	loadValues                   map[string]string
 	embedded, dark               bool
 	popupHost                    bool
+	popupEditorHeight            int
+	visibleLayout                string
 	live                         string
 	liveGeneration               int
 	schedule                     *ScheduleEditor
@@ -148,6 +150,7 @@ func (f *Form) SetEmbedded(value bool) {
 }
 func (f *Form) SetMouse(value bool) {
 	f.spec.Mouse = value
+	f.clearPopupPress()
 	if f.schedule != nil {
 		f.schedule.SetMouse(value)
 	}
@@ -195,6 +198,7 @@ func NewForm(ctx context.Context, spec FormSpec) *Form {
 	if len(f.inputs) > 0 {
 		f.inputs[0].Focus()
 	}
+	f.visibleLayout = fmt.Sprint(f.visible())
 	return f
 }
 func (f *Form) Init() tea.Cmd {
@@ -313,16 +317,7 @@ func (f *Form) changed(key string) tea.Cmd {
 	if key == "host" || key == "source" {
 		f.scheduleContext = nil
 	}
-	list := f.visible()
-	found := false
-	for _, i := range list {
-		if i == f.focus {
-			found = true
-		}
-	}
-	if !found && len(list) > 0 {
-		f.focusField(list[0])
-	}
+	f.reflowDraft()
 	return tea.Batch(cmds...)
 }
 func (f *Form) focusField(index int) {
@@ -387,6 +382,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return f, nil
 	}
+	defer f.reflowDraft()
 	switch m := msg.(type) {
 	case textEditorReady:
 		return f, f.launchTextEditor(m)
@@ -445,6 +441,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.generation != f.loadGeneration || f.stage != "edit" {
 			return f, nil
 		}
+		f.clearPopupPress()
 		var updates []tea.Cmd
 		for _, u := range m.fields {
 			for i := range f.spec.Fields {
@@ -642,6 +639,16 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			f.move(-1)
 			return f, nil
 		}
+		if len(f.inputs) > 0 && len(f.spec.Fields[f.focus].Options) == 0 {
+			if key == "up" || key == "down" {
+				delta := 1
+				if key == "up" {
+					delta = -1
+				}
+				f.move(delta)
+				return f, nil
+			}
+		}
 		if len(f.inputs) > 0 && len(f.spec.Fields[f.focus].Options) > 0 {
 			switch key {
 			case "left", "up", "h", "k":
@@ -695,13 +702,21 @@ func (f *Form) activate(id string) tea.Cmd {
 	case "return":
 		return f.finish()
 	case "advanced":
+		before := map[int]bool{}
+		for _, index := range f.visible() {
+			before[index] = true
+		}
 		f.advanced = !f.advanced
-		if !f.advanced && len(f.inputs) > 0 && f.spec.Fields[f.focus].Advanced {
-			list := f.visible()
-			if len(list) > 0 {
-				f.focusField(list[0])
+		if f.advanced {
+			for _, index := range f.visible() {
+				if f.spec.Fields[index].Advanced && !before[index] {
+					f.focusField(index)
+					break
+				}
 			}
 		}
+		f.clearPopupPress()
+		f.reflowDraft()
 	case "browse":
 		return f.startPicker()
 	default:
@@ -763,9 +778,17 @@ func (f *Form) buttons() [][2]string {
 	switch f.stage {
 	case "edit":
 		if f.DraftPopupActive() && f.width < 48 {
-			return [][2]string{{"review", "Review ^S"}, {"advanced", "More ^O"}, {"cancel", "Esc"}}
+			label := "More ^O"
+			if f.advanced {
+				label = "Less ^O"
+			}
+			return [][2]string{{"review", "Review ^S"}, {"advanced", label}, {"cancel", "Esc"}}
 		}
-		return [][2]string{{"review", "Review ^S"}, {"advanced", "Advanced ^O"}, {"cancel", "Cancel Esc"}}
+		label := "Advanced ^O"
+		if f.advanced {
+			label = "Basic ^O"
+		}
+		return [][2]string{{"review", "Review ^S"}, {"advanced", label}, {"cancel", "Cancel Esc"}}
 	case "review":
 		return [][2]string{{"apply", "Apply ^S"}, {"back", "Back Esc"}, {"cancel", "Cancel"}}
 	case "result":
@@ -910,21 +933,20 @@ func (f *Form) View() tea.View {
 	} else if f.stage == "edit" {
 		status = t.Muted.Render("Draft only · Ctrl+S reviews before saving")
 		if f.DraftPopupActive() {
-			visible := f.visible()
-			position := 0
-			for i, field := range visible {
-				if field == f.focus {
-					position = i + 1
-					break
-				}
-			}
-			status = t.Muted.Render(fmt.Sprintf("Draft only · field %d/%d · ^S review", position, len(visible)))
+			visible, start, rows := f.fieldWindow()
+			status = t.Muted.Render(fmt.Sprintf("Draft only · %d–%d/%d · Tab/↑↓/wheel", min(start+1, len(visible)), min(start+rows, len(visible)), len(visible)))
 		}
 	}
 	lines = append(lines, clip(status, f.width), "")
 	buttons := []string{}
+	visibleButtons := map[string]bool{}
+	for _, hit := range f.hits() {
+		visibleButtons[hit.id] = true
+	}
 	for _, b := range f.buttons() {
-		buttons = append(buttons, t.Accent.Render("[ "+b[1]+" ]"))
+		if visibleButtons[b[0]] {
+			buttons = append(buttons, t.Accent.Render("[ "+b[1]+" ]"))
+		}
 	}
 	lines = append(lines, clip(strings.Join(buttons, " "), f.width), "")
 	v := tea.NewView(fitLines(strings.Join(lines, "\n"), f.width, f.height))

@@ -42,7 +42,7 @@ func popupMousePoint(f *Form, x, y int) (int, int) {
 	return inner.x + x, inner.y + y + 2
 }
 
-func TestJobDraftPopupPreservesDashboardTypingAndExplicitViewSwitch(t *testing.T) {
+func TestJobDraftPopupPreservesDashboardTypingAndModalNavigation(t *testing.T) {
 	m, f := draftPopupFixture(t)
 	m.Update(tea.WindowSizeMsg{Width: 180, Height: 44})
 	view := ansi.Strip(m.View().Content)
@@ -66,8 +66,8 @@ func TestJobDraftPopupPreservesDashboardTypingAndExplicitViewSwitch(t *testing.T
 		t.Fatal("popup click leaked into dashboard")
 	}
 	m.Update(tea.KeyPressMsg{Code: '3', Mod: tea.ModAlt})
-	if m.view != "playground" || m.child != f {
-		t.Fatal("explicit draft suspension was lost")
+	if m.view != "jobs" || m.child != f {
+		t.Fatal("removed Alt shortcut escaped modal draft")
 	}
 	m.Update(tea.KeyPressMsg{Code: '1', Mod: tea.ModAlt})
 	if m.view != "jobs" || m.child != f || f.Values()["name"] != "draft name123qjkl/" {
@@ -240,5 +240,159 @@ func TestPopupOptionDoesNotChangeStandaloneWizardDimensions(t *testing.T) {
 	f.SetEmbedded(false)
 	if f.width != 120 || f.height != 32 {
 		t.Fatal("standalone dimensions not restored")
+	}
+}
+
+func advancedPopupFixture(t *testing.T) (*dashboard, *Form) {
+	t.Helper()
+	m := fixtureDashboard(t)
+	m.mouse = true
+	fields := []Field{}
+	for i := range 9 {
+		label := fmt.Sprintf("Basic %d", i+1)
+		if i == 8 {
+			label = "Remark"
+		}
+		fields = append(fields, Field{Key: fmt.Sprintf("basic%d", i), Label: label})
+	}
+	fields = append(fields,
+		Field{Key: "runner", Label: "Run directly or enqueue", Value: "direct", Options: []string{"direct", "pueue"}, Advanced: true},
+		Field{Key: "group", Label: "Existing Pueue group", Advanced: true, Show: func(v map[string]string) bool { return v["runner"] == "pueue" }},
+		Field{Key: "environment", Label: "Variables", Advanced: true},
+	)
+	for _, key := range []string{"output", "stderr", "log"} {
+		fields = append(fields, Field{Key: key, Label: "Path " + key, Advanced: true, Show: func(v map[string]string) bool { return v["runner"] != "pueue" || v[key] != "" }})
+	}
+	f := NewForm(m.ctx, FormSpec{Title: "add job · local/user", Popup: true, Mouse: true, Fields: fields})
+	f.SetEmbedded(true)
+	f.SetPopupHost(true)
+	m.child, m.childView = f, "jobs"
+	m.Update(tea.WindowSizeMsg{Width: 180, Height: 62})
+	f.focusField(8)
+	t.Cleanup(f.cancel)
+	return m, f
+}
+
+func TestAdvancedPopupGrowsAndRevealsNewFields(t *testing.T) {
+	m, f := advancedPopupFixture(t)
+	before := f.draftPopupLayout().box.h
+	m.Update(ctrl('o'))
+	if len(f.visible()) != 14 || f.focus != 9 || f.draftPopupLayout().box.h <= before {
+		t.Fatal("Advanced did not grow and select the first new field", len(f.visible()), f.focus, before, f.draftPopupLayout().box)
+	}
+	view := ansi.Strip(m.View().Content)
+	for _, expected := range []string{"Run directly or enqueue", "Path log", "1–14/14", "Basic ^O"} {
+		if !strings.Contains(view, expected) {
+			t.Fatal("expanded form did not reveal settings", expected, view)
+		}
+	}
+	f.focusField(11)
+	m.Update(tea.PasteMsg{Content: "TOKEN=keep"})
+	f.mousePress = "apply"
+	m.Update(ctrl('o'))
+	if f.advanced || f.focus != 8 || f.Values()["environment"] != "TOKEN=keep" || f.draftPopupLayout().box.h != before || f.mousePress != "" {
+		t.Fatal("collapse lost answers or nearest basic focus", f.focus, f.Values(), f.draftPopupLayout().box)
+	}
+	m.Update(ctrl('o'))
+	if f.focus != 9 || f.Values()["environment"] != "TOKEN=keep" {
+		t.Fatal("reopening Advanced lost input")
+	}
+}
+
+func TestAdvancedPopupCappedRangeNavigationAndControls(t *testing.T) {
+	m, f := advancedPopupFixture(t)
+	for _, size := range [][2]int{{120, 32}, {80, 24}, {40, 12}} {
+		if f.advanced {
+			m.Update(ctrl('o'))
+		}
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		f.focusField(8)
+		m.Update(ctrl('o'))
+		if f.focus != 9 || !strings.Contains(ansi.Strip(m.View().Content), "Run directly or enqueue") {
+			t.Fatal("capped popup hid first advanced field", size, f.focus, m.View().Content)
+		}
+		if !strings.Contains(ansi.Strip(m.View().Content), "/14") || !strings.Contains(ansi.Strip(m.View().Content), "Tab/↑↓/wheel") {
+			t.Fatal("capped popup lacks range and navigation affordance", size, m.View().Content)
+		}
+		for range len(f.visible()) {
+			m.Update(special(tea.KeyTab))
+			if !strings.Contains(ansi.Strip(m.View().Content), f.spec.Fields[f.focus].Label) {
+				t.Fatal("Tab cannot reach a field after expansion", size, f.focus)
+			}
+		}
+		f.focusField(11)
+		m.Update(special(tea.KeyDown))
+		if f.focus != 12 {
+			t.Fatal("Down did not navigate single-line fields")
+		}
+		inner := f.draftPopupLayout().inner
+		m.Update(tea.MouseWheelMsg{X: inner.x + 1, Y: inner.y + 2, Button: tea.MouseWheelDown})
+		if f.focus != 13 {
+			t.Fatal("wheel did not reveal the next field")
+		}
+		lines := strings.Split(ansi.Strip(m.View().Content), "\n")
+		for _, hit := range f.hits() {
+			if hit.id == "review" || hit.id == "advanced" || hit.id == "cancel" {
+				x, y := popupMousePoint(f, hit.rect.x, hit.rect.y)
+				if y >= len(lines) || x+hit.rect.w > size[0] || !strings.Contains(ansi.Cut(lines[y], x, x+hit.rect.w), "[") {
+					t.Fatal("expanded control is outside its painted bounds", size, hit)
+				}
+			}
+		}
+	}
+}
+
+func TestPopupReflowsDynamicVisibilityAndKeepsNestedEditorStable(t *testing.T) {
+	m, f := advancedPopupFixture(t)
+	m.Update(ctrl('o'))
+	fullHeight := f.draftPopupLayout().box.h
+	m.Update(special(tea.KeyRight))
+	if f.Values()["runner"] != "pueue" || len(f.visible()) != 12 || f.draftPopupLayout().box.h >= fullHeight || f.height != f.draftPopupLayout().inner.h {
+		t.Fatal("runner visibility did not reflow actual model geometry", f.Values(), len(f.visible()), f.height, f.draftPopupLayout())
+	}
+	f.focusField(10)
+	m.Update(special(tea.KeyF1))
+	if f.help == nil {
+		t.Fatal("nested help did not open")
+	}
+	nestedHeight := f.draftPopupLayout().box.h
+	f.loadGeneration = 42
+	f.loadValues = f.Values()
+	runner := "direct"
+	m.Update(formLoaded{generation: 42, fields: []FieldUpdate{{Key: "runner", Value: &runner, Options: []string{"direct", "pueue"}}}})
+	if f.help == nil || f.draftPopupLayout().box.h != nestedHeight || f.help.height != f.height {
+		t.Fatal("late defaults moved an open nested editor")
+	}
+	_, closeHelp := m.Update(special(tea.KeyEscape))
+	m.Update(closeHelp())
+	if f.help != nil || len(f.visible()) != 14 || f.draftPopupLayout().box.h != fullHeight || f.height != f.draftPopupLayout().inner.h {
+		t.Fatal("return from nested editor did not reflow updated fields", f.height, f.draftPopupLayout())
+	}
+	if f.focus != 9 {
+		t.Fatal("hidden focus did not move to nearest visible field", f.focus)
+	}
+}
+
+func TestAdvancedMouseExpansionResetsPressAtNewGeometry(t *testing.T) {
+	m, f := advancedPopupFixture(t)
+	var advanced hitRegion
+	for _, hit := range f.hits() {
+		if hit.id == "advanced" {
+			advanced = hit
+		}
+	}
+	x, y := popupMousePoint(f, advanced.rect.x, advanced.rect.y)
+	m.Update(tea.MouseClickMsg{X: x, Y: y})
+	m.Update(tea.MouseReleaseMsg{X: x, Y: y})
+	if !f.advanced || f.focus != 9 || f.mousePress != "" {
+		t.Fatal("mouse expansion did not reveal Advanced safely")
+	}
+	m.Update(tea.MouseReleaseMsg{X: x, Y: y})
+	if !f.advanced {
+		t.Fatal("stale release toggled the moved button")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
+	if !strings.Contains(ansi.Strip(m.View().Content), "Run directly or enqueue") || f.height != f.draftPopupLayout().inner.h {
+		t.Fatal("resize lost the revealed field")
 	}
 }

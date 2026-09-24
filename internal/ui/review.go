@@ -24,8 +24,7 @@ type reviewPresentationKey struct {
 	dark, stopping                         bool
 }
 
-// Modal marks states that own keyboard and mouse above the dashboard. Explicit
-// Alt view switching remains available for opted-in draft popups only.
+// Modal marks states that own keyboard and mouse above the dashboard.
 func (f *Form) Modal() bool {
 	return f.reviewModal() || f.DraftPopupActive()
 }

@@ -33,10 +33,7 @@ var defaultActions = []action{
 func Actions(keys map[string]string) ([]action, error) {
 	a := append([]action(nil), defaultActions...)
 	seen := map[string]string{}
-	reserved := map[string]bool{"q": true, "esc": true, "?": true, "/": true, ":": true, "tab": true, "shift+tab": true, "j": true, "k": true, "h": true, "l": true, "g": true, "G": true, "up": true, "down": true, "left": true, "right": true, "enter": true, "ctrl+c": true, "m": true}
-	for _, key := range []string{"alt+1", "alt+2", "alt+3"} {
-		reserved[key] = true
-	}
+	reserved := map[string]bool{"q": true, "esc": true, "?": true, "/": true, ":": true, "tab": true, "shift+tab": true, "j": true, "k": true, "h": true, "l": true, "g": true, "G": true, "up": true, "down": true, "left": true, "right": true, "enter": true, "ctrl+c": true}
 	for i := range a {
 		if key, ok := keys[a[i].ID]; ok {
 			if key == "" || reserved[key] {
@@ -614,7 +611,6 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if c, e := config.Load(m.configPath); e == nil {
 			previous := m.scopeKey()
-			previousMouse := m.service.Config.Mouse
 			m.service = service.New(c)
 			m.targets = m.service.Targets("all", "all")
 			m.scope = 0
@@ -623,8 +619,12 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.scope = i + 1
 				}
 			}
-			if previousMouse != c.Mouse {
-				m.mouse = c.Mouse
+			m.mouse, m.mousePress = c.Mouse, ""
+			if m.playground != nil {
+				m.playground.SetMouse(c.Mouse)
+			}
+			if child, ok := m.child.(interface{ SetMouse(bool) }); ok {
+				child.SetMouse(c.Mouse)
 			}
 			for key := range m.generations {
 				m.generations[key]++
@@ -820,10 +820,6 @@ func (m *dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.savedFilter = m.filter.Value()
 			m.filter.SetValue("")
 			return m, m.filter.Focus()
-		}
-		if key == "m" {
-			m.mouse = !m.mouse
-			return m, nil
 		}
 		if m.view == "week" {
 			switch key {
@@ -1160,7 +1156,7 @@ func (m *dashboard) View() tea.View {
 	header := m.header()
 	contextLine := m.scopeKey() + " · display " + m.displayLocation().String()
 	if m.view == "playground" && m.playground != nil && m.playground.Editing() {
-		contextLine = "Editing cron · Alt+1/2/3 switch views · Esc leaves input"
+		contextLine = "Editing cron · Esc leaves input"
 	}
 	if m.filtering || m.timezoneEditing {
 		contextLine = m.filter.View()
@@ -1235,7 +1231,7 @@ func (m *dashboard) View() tea.View {
 			buttons = append(buttons, t.Accent.Render("[ "+b[1]+" ]"))
 			x += w + 1
 		}
-		hint := "Tab focus · / search · : actions · ? help · q quit · m mouse"
+		hint := "Tab focus · / search · : actions · ? help · q quit"
 		body += "\n" + t.Muted.Render(clip(statusSummary(status), m.width)) + "\n" + strings.Join(buttons, " ") + "\n" + t.Muted.Render(clip(hint, m.width))
 	}
 	content := fitLines(header+"\n"+t.Muted.Render(clip(contextLine, m.width))+"\n"+body, m.width, m.height)

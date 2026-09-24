@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Show Add/Edit job drafts and their nested editors in dashboard popups while retaining unsaved drafts across explicit view switches.
+- Resize Advanced job popups and reveal newly expanded fields; remove Alt view-switching shortcuts and make mouse capture a config-only preference, enabled by default.
+
+- Show Add/Edit job drafts and their nested editors in dashboard popups.
 
 - Keep review/save results in dashboard popups with highlighted diffs, clear job status changes and human-readable receipts.
 - Simplify native Pueue task payloads and use its working-directory option without a duplicate `cd`.

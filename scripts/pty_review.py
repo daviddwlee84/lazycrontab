@@ -93,21 +93,21 @@ def check_add_popup(binary):
             session.pump(0.3)
             session.resize(180, 44)
             session.expect(command)
-            # Typing retains printable action keys; only explicit Alt tab
-            # navigation suspends the draft and returns to its exact values.
+            # Drafts own printable keys and Alt combinations. Page navigation
+            # is available only after closing this interaction.
             mark = session.mark(); session.click(42, 0); session.click(4, 4)
             session.pump(0.2)
             assert b"F1 Fields" not in session.output[mark:]
-            mark = session.mark(); session.send(b"\x1b3")
-            session.expect("F1 Fields", mark)
-            mark = session.mark(); session.send(b"\x1b1")
+            mark = session.mark(); session.send(b"\x1b3\x1b2\x1b1"); session.pump(0.3)
+            assert b"F1 Fields" not in session.output[mark:] and b"Forecast" not in session.output[mark:]
+            session.resize(181, 44)
             session.expect("add job", mark)
             session.expect(command, mark)
 
             mark = session.mark(); session.send(b"\x1bOP")
             session.expect("Concepts", mark)
             session.click(2, 35)  # Beside nested Help's footer, outside the frame.
-            mark = session.mark(); session.resize(181, 44)
+            mark = session.mark(); session.resize(180, 44)
             session.expect("Concepts", mark)
             mark = session.mark(); session.send(b"\x1b")
             session.expect("add job", mark)
@@ -144,8 +144,9 @@ def check_add_popup(binary):
             for label in ("Working directory", "Schedule", "Enabled", "Remark"):
                 next_field(label)
             session.send("popup remark")
-            session.send(b"\x0f")
-            for label in ("Run directly", "Variables", "Append output", "Separate error", "Existing log", "Host"):
+            mark = session.mark(); session.send(b"\x0f")
+            session.expect("directly or enqueue", mark)
+            for label in ("Variables", "Append output", "Separate error", "Existing log", "Host"):
                 next_field(label)
             mark = session.mark(); session.wheel(20, 6)
             session.expect("Source", mark)
@@ -196,7 +197,79 @@ def check_add_popup(binary):
             session.expect("F1 Fields", mark)
             session.expect("0 9 * * 1-5", mark)
             session.close(b"\x1b")
-        print("Draft PTY passed: Jobs Add popup/backdrop, input and Alt draft retention, nested help/picker/schedule/multiline, all fields at narrow sizes, wheel, review Back, cancel without target files, one save, terminal restoration")
+        print("Draft PTY passed: Jobs Add popup/backdrop, modal input ownership, nested help/picker/schedule/multiline, all fields at narrow sizes, wheel, review Back, cancel without target files, one save, terminal restoration")
+
+
+def check_advanced_and_mouse(binary):
+    with tempfile.TemporaryDirectory(prefix="lazycrontab-advanced-pty-") as tmp:
+        root = Path(tmp)
+        env, args, cron = prepare_fixture(root)
+        before = cron.read_bytes()
+        with terminal(binary, args, env, root) as session:
+            session.resize(180, 60)
+            session.expect("First task")
+            session.send("n"); session.expect("add job")
+            # No resize or navigation after expansion: new fields and the
+            # focused runner must appear immediately in the enlarged frame.
+            mark = session.mark(); session.send(b"\x0f")
+            session.expect("Run directly or enqueue", mark)
+            session.expect("Existing log to inspect", mark)
+            session.expect("14/14", mark)
+            session.send("\tSAMPLE=kept")
+            session.pump(0.2)
+            mark = session.mark(); session.send(b"\x0f")
+            session.expect("Advanced ^O", mark)
+            mark = session.mark(); session.send(b"\x0f")
+            session.expect("Run directly or enqueue", mark)
+            session.expect("SAMPLE=kept", mark)
+
+            # A capped frame focuses the same new field and exposes an honest
+            # visible range. Collapsing and reopening preserves entered values.
+            session.send(b"\x0f"); session.pump(0.2)
+            session.resize(40, 12); session.pump(0.2)
+            mark = session.mark(); session.send(b"\x0f")
+            session.expect("directly or enqueue", mark)
+            session.expect("10–10/14", mark)
+            mark = session.mark(); session.send(b"\t")
+            session.expect("SAMPLE=kept", mark)
+            session.send(b"\x1b"); session.pump(0.2)
+            session.close()
+        assert cron.read_bytes() == before and not Path(env["FIXTURE_WRITES"]).exists()
+
+    for preference in ("default", "off", "custom-m"):
+        with tempfile.TemporaryDirectory(prefix="lazycrontab-mouse-pty-") as tmp:
+            root = Path(tmp)
+            env, args, cron = prepare_fixture(root)
+            config = Path(args[1])
+            if preference == "off":
+                config.write_text(config.read_text() + "mouse=false\n")
+            elif preference == "custom-m":
+                config.write_text(config.read_text() + '[keys]\nplayground="m"\n')
+            with terminal(binary, args, env, root) as session:
+                session.expect("First task"); session.pump(0.2)
+                capture_enabled = b"\x1b[?1002h" in session.output
+                assert capture_enabled == (preference != "off"), f"wrong configured mouse capture: {preference}"
+                mark = session.mark(); session.send("m"); session.pump(0.2)
+                if preference == "custom-m":
+                    session.expect("F1 Fields", mark)
+                    assert b"\x1b[?1002l" not in session.output[mark:], "custom m toggled mouse capture"
+                else:
+                    assert b"\x1b[?1002h" not in session.output[mark:] and b"\x1b[?1002l" not in session.output[mark:], "m still changes mouse mode"
+                    mark = session.mark(); session.click(42, 0); session.pump(0.2)
+                    if preference == "default":
+                        session.expect("F1 Fields", mark)
+                    else:
+                        assert b"F1 Fields" not in session.output[mark:], "mouse=false accepted a click"
+                        session.send("3"); session.expect("F1 Fields", mark)
+                session.close()
+            if preference != "custom-m":
+                with terminal(binary, [*args, "disable", "first"], env, root) as session:
+                    session.expect("Review"); session.expect("disable"); session.pump(0.2)
+                    capture_enabled = b"\x1b[?1002h" in session.output
+                    assert capture_enabled == (preference == "default"), f"CLI confirmation ignored mouse preference: {preference}"
+                    session.close(b"\x1b")
+            assert not Path(env["FIXTURE_WRITES"]).exists()
+    print("Advanced/mouse PTY passed: expansion grows without resize and focuses new fields, narrow range and preserved values, default/on and configured off capture, no m toggle, custom m binding")
 
 
 def main():
@@ -298,6 +371,7 @@ def main():
         assert writes() == 1
         print("Review PTY passed: dashboard-backed toggle popup, default-No Enter, outside mouse containment, narrow/wide resize, one apply, human saved/error receipts, retained selection/filter, cancel and conflict safeguards, terminal restoration")
     check_add_popup(binary)
+    check_advanced_and_mouse(binary)
 
 
 if __name__ == "__main__":

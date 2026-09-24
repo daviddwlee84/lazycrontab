@@ -20,7 +20,7 @@ type HelpBrowser struct {
 }
 type helpClosedMsg struct{ owner *HelpBrowser }
 
-func (h *HelpBrowser) SetMouse(v bool) { h.mouse = v }
+func (h *HelpBrowser) SetMouse(v bool) { h.mouse = v; h.press = "" }
 
 func NewHelpBrowser(topic string, mouse bool) *HelpBrowser {
 	q := textinput.New()

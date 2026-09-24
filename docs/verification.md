@@ -2,6 +2,24 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Advanced layout and mouse preference revision
+
+UI/CLI/config race tests, vet and source build passed on macOS arm64 and Linux
+arm64 (Go 1.26.6 in a disposable container). Review/draft/Advanced/mouse, general
+and managed-script PTY harnesses passed on both. At 180×60, the first Advanced
+activation grows the popup and reveals its first new field without a resize
+event; at 40×12, the focused advanced field and visible-range indicator remain
+usable. Collapse/reopen retains entered values. Model tests cover dynamic field
+visibility, late defaults, nested-editor sizing and click geometry after reflow.
+
+Real PTYs verify Alt digits no longer switch views, Playground still switches
+after leaving input, mouse capture defaults on, explicit false disables capture,
+and m neither changes mouse mode nor prevents a configured action binding.
+Standalone CLI confirmations follow the same mouse preference. Config and UI
+tests verify false survives serialization/reload, retained surfaces receive the
+new setting, and pending clicks are cleared. Same-viewport basic/advanced and
+narrow VHS images were visually inspected; terminal restoration passed.
+
 ## Add/Edit draft popup revision
 
 UI/CLI race tests, vet and source build passed on macOS arm64 and Linux arm64

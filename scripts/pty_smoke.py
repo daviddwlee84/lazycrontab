@@ -180,8 +180,8 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
                 session.resize(*size)
                 session.pump()
 
-            # A true Playground tab can be left directly. Typing still owns
-            # numbers; modifier navigation retains the entire expression draft.
+            # A true Playground tab can be left directly. Typing owns numbers;
+            # Esc leaves the field before ordinary page shortcuts are active.
             mark=session.mark();session.send("3")
             session.expect("F1 Fields",mark)
             mark=session.mark();session.send("1")
@@ -191,9 +191,12 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             session.send(b"\r\x01\x0b12")  # edit minute, Home, delete to end
             session.pump(0.3)
             session.expect("12 9 * * 1-5",mark)
-            mark=session.mark();session.send(b"\x1b1")
+            mark=session.mark();session.send(b"\x1b1");session.pump(0.2)
+            assert b"Seed task" not in session.output[mark:], "Alt+1 still changed the page"
+            session.send(b"\x1b");session.pump(0.2)
+            mark=session.mark();session.send("1")
             session.expect("Seed task",mark)
-            mark=session.mark();session.send(b"\x1b3")
+            mark=session.mark();session.send("3")
             session.expect("12 9 * * 1-5",mark)
             # Use opens the same reviewed add workflow; cancelling returns
             # to the still-intact Playground instead of a new child process.
@@ -359,7 +362,7 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             assert str(directory).startswith(f"/tmp/lct-{os.getuid()}-")
             directory.rmdir()  # Fake SSH never creates a socket or master.
         assert not (root/"pueue-args").exists(),"smoke test submitted a Pueue job"
-        print("PTY passed: text ownership, resize, Playground tab/Alt navigation and preserved draft, shared add/review/Back/apply without replacing existing jobs, delete cancel, SGR tabs/forms/script picker, script preset preflight and schedule editor, readable child errors, editor return, week/agenda, modal wheel containment, SSH alias picker/auth handoff, signal exit, terminal restoration")
+        print("PTY passed: text ownership, resize, Playground blur/page navigation and preserved draft, shared add/review/Back/apply without replacing existing jobs, delete cancel, SGR tabs/forms/script picker, script preset preflight and schedule editor, readable child errors, editor return, week/agenda, modal wheel containment, SSH alias picker/auth handoff, signal exit, terminal restoration")
 
 
 if __name__ == "__main__":

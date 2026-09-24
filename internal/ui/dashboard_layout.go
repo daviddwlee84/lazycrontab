@@ -306,7 +306,11 @@ func (m *dashboard) jobBody() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, panes...)
 }
 func (m *dashboard) helpLines() []string {
-	lines := []string{"Contextual actions · F1 concepts", "↑↓ / j k select · Tab focus · Alt+1/2/3 switch views", "Typing owns letters and digits · Esc leaves the current interaction", "/ search · : actions · m mouse capture · q quit", ""}
+	navigation := "↑↓ / j k select · Tab focus"
+	if m.mouse {
+		navigation += " · click tabs to switch views"
+	}
+	lines := []string{"Contextual actions · F1 concepts", navigation, "Typing owns letters and digits · Esc leaves the current interaction", "/ search · : actions · q quit", "Mouse: enabled by default; configure mouse = false in config.toml to disable", ""}
 	for _, a := range m.actions {
 		if m.available(a) {
 			lines = append(lines, fmt.Sprintf("%-10s %s", a.Key, a.Label))

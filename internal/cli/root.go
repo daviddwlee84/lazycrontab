@@ -212,7 +212,11 @@ func (o *options) approveReview(cmd *cobra.Command, title string, plan any, revi
 	if o.json || !tty() {
 		return usage("this operation requires --yes; use --dry-run to review first")
 	}
-	_, e := ui.RunFormReview(cmd.Context(), ui.FormSpec{Title: title,
+	preferences := config.Defaults()
+	if loaded, err := config.Load(o.config); err == nil {
+		preferences = loaded
+	}
+	_, e := ui.RunFormReview(cmd.Context(), ui.FormSpec{Title: title, Mouse: preferences.Mouse, Theme: preferences.Theme,
 		Build: func(context.Context, map[string]string) (ui.Review, error) { return review, nil },
 		Apply: func(ctx context.Context, _ map[string]string, _ ui.Review) (string, error) {
 			_, message, e := apply(ctx)

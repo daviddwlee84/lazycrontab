@@ -42,14 +42,12 @@ The dashboard uses colored focus, selection and status indicators. Wide terminal
 | `E` / `L` | Edit an explicit script / inspect logs |
 | `v` / `V` | View / edit the complete raw source |
 | `1` / `2` / `3` | Jobs / Week / Playground |
-| `Alt+1` / `Alt+2` / `Alt+3` | Switch views while editing; preserve the draft |
 | `F1` | Concepts and practical help (outside the cron editor) |
 | `z` | Change this session's display timezone |
 | `Ctrl+R` | Refresh |
 | `a` / `s` | Add host / source |
 | `A` | Native SSH authentication |
 | `Q` / `R` / `C` | Configured lazypueue connection / source reload / config editor |
-| `m` | Toggle mouse capture for native terminal selection |
 | `?` / `Esc` / `q` | Help / Back / Quit |
 
 Effective bindings drive both help and dispatch. Printable characters belong to the focused input, including `q`, `j` and `/`.
@@ -58,9 +56,12 @@ Forms use Tab/Shift+Tab, arrows or clickable controls for choices, `Ctrl+P`/Brow
 
 Add/Edit job forms open in a centered popup with the dashboard still visible.
 Fields scroll with focus; schedule editing, path browsing, help and managed-script
-content stay in the same popup and return to the current draft. Outside clicks
-stay within the popup. `Alt+1/2/3` still lets you suspend and resume an unsaved
-draft across views. Standalone CLI wizards retain their full terminal layout.
+content stay in the same popup and return to the current draft. Advanced expands
+the popup to fit the available height and focuses the first newly revealed field.
+When space is limited, a visible field range and Tab/arrows/wheel hints show how
+to reach the remaining fields. Collapsing Advanced retains entered values.
+The popup owns input until you finish or cancel it. Standalone CLI wizards retain
+their full terminal layout.
 
 Review and save results also use a centered popup.
 Enable/disable first shows the job and status transition, followed by the exact
@@ -88,9 +89,9 @@ configured read-only sources allow viewing only. Supercronic reload stays separa
 
 Week starts on Monday. Arrows select a day/hour; Enter opens exact agenda rows; PgUp/PgDn pages; `[` / `]` changes weeks. UTC offsets distinguish repeated DST times. Counts and agenda are bounded and label truncation. These are forecast triggers, not execution history. Pueue jobs show enqueue times; execution may wait in the queue.
 
-Playground is a persistent tab, sharing the cron editor and parser with job forms. Each box represents one cron field: `*/5`, `1,15` and ranges fit inside a box. F1–F4 switch fields, presets, limited English phrases and macros. Errors explain the affected field; incomplete drafts remain editable. Paste a complete expression to populate matching boxes. Press **u / Use in new job** to open an add draft with the expression filled in; returning preserves the experiment. Copy and preview do not install a job. While editing, numbers are text: use Alt+1/2/3, clickable tabs, or Esc followed by a view shortcut.
+Playground is a persistent tab, sharing the cron editor and parser with job forms. Each box represents one cron field: `*/5`, `1,15` and ranges fit inside a box. F1–F4 switch fields, presets, limited English phrases and macros. Errors explain the affected field; incomplete drafts remain editable. Paste a complete expression to populate matching boxes. Press **u / Use in new job** to open an add draft with the expression filled in; returning preserves the experiment. Copy and preview do not install a job. While editing, numbers are text: click a header tab or press Esc to leave the input before using a view shortcut. Alt+1/2/3 have no built-in bindings.
 
-Tabs, fields, selectors, action buttons, week cells, agenda rows and help support the mouse. The wheel scrolls the hovered pane; overlays consume their own events. Turn capture off with `m` to restore native terminal text selection. Theme follows `theme = "auto"`, `"dark"` or `"light"`; `NO_COLOR` retains text and shape indicators.
+Tabs, fields, selectors, action buttons, week cells, agenda rows and help support the mouse, enabled by default. The wheel scrolls the hovered pane; overlays consume their own events. Configure `mouse = false` to disable capture; `m` has no built-in action. Theme follows `theme = "auto"`, `"dark"` or `"light"`; `NO_COLOR` retains text and shape indicators.
 
 ## CLI and automation
 
@@ -257,6 +258,17 @@ See [examples/config.toml](examples/config.toml). macOS and Linux both use XDG:
 | Cache | `~/.cache/lazycrontab/` | SSH references and minimal job-ID completion candidates |
 
 Absolute `XDG_*_HOME` variables override these roots; relative values are ignored. Reads and previews do not create directories. Explicit authentication, saves and observed manual runs create private state as needed. Files use 0600 and directories 0700.
+
+Mouse capture is controlled only through the top-level setting in
+`$XDG_CONFIG_HOME/lazycrontab/config.toml` (default `~/.config/lazycrontab/config.toml`):
+
+```toml
+mouse = true # default; set false for native terminal text selection
+```
+
+Restart the TUI after an external config edit, or use its `C` config-editor action;
+returning from that editor reloads the preference for the dashboard and retained
+Playground. A saved `false` stays disabled. There is no session mouse-toggle key.
 
 Precedence is explicit flags → supported `LAZYCRONTAB_*` variables → TOML → defaults. Environment overrides: `LAZYCRONTAB_CONFIG`, `LAZYCRONTAB_HOST`, `LAZYCRONTAB_SOURCE`, `LAZYCRONTAB_LOCALE`. `config show --json` reports effective settings/path. Explicit missing or malformed config is an error; `config edit` remains available for repair.
 

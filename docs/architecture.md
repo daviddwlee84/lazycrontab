@@ -18,8 +18,11 @@ The shared form renders review/apply/result as an opaque popup over the retained
 dashboard, with one input owner and explicit acknowledgement before refresh.
 Job drafts opt into the same popup presentation when embedded; their nested
 editors and pickers use the frame's inner dimensions and translated input.
-Explicit Alt view switching preserves the entire unsaved draft. Standalone
-wizards keep their existing layout.
+Draft height follows visible fields; Advanced reveals its first new field and
+capped forms remain scrollable. Popups own input until completion or cancellation.
+Standalone wizards keep their existing layout. Mouse capture follows the XDG
+setting across config reloads, including retained editors; there is no session
+toggle or built-in Alt view-switching binding.
 Review text and raw diffs are separate presentation fields; a built-in renderer
 wraps and highlights changes without invoking a pager. Human save/run summaries
 do not replace machine receipts or collapse partial/unknown outcomes into success.

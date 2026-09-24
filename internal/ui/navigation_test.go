@@ -35,6 +35,15 @@ func TestPlaygroundIsPersistentAndTypingOwnsNumbers(t *testing.T) {
 	}
 	m.Update(tea.KeyPressMsg{Code: '1', Mod: tea.ModAlt})
 	m.Update(tea.KeyPressMsg{Code: '3', Mod: tea.ModAlt})
+	if m.view != "playground" {
+		t.Fatal("removed Alt shortcut changed views")
+	}
+	m.Update(special(tea.KeyEscape))
+	m.Update(key('1'))
+	if m.view != "jobs" {
+		t.Fatal("leaving cron input did not restore numeric view navigation")
+	}
+	m.Update(key('3'))
 	if m.playground != editor || !strings.HasPrefix(editor.Expression(), "12 ") {
 		t.Fatal("switch lost draft")
 	}

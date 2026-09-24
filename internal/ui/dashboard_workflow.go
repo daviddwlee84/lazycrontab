@@ -101,13 +101,6 @@ func offsetMouseXY(msg tea.Msg, dx, dy int) tea.Msg {
 // the focused workflow owns keyboard, paste and mouse input.
 func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
 	if form, ok := m.child.(*Form); ok && m.childShowing() && form.Modal() {
-		if key, ok := msg.(tea.KeyPressMsg); ok && form.DraftPopupActive() {
-			if view := map[string]string{"alt+1": "jobs", "alt+2": "week", "alt+3": "playground"}[key.String()]; view != "" {
-				m.mousePress = ""
-				form.clearPopupPress()
-				return true, m.act(view)
-			}
-		}
 		switch msg.(type) {
 		case tea.KeyPressMsg, tea.PasteMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
 			m.mousePress = ""
@@ -231,10 +224,6 @@ func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if !m.help && !m.palette && m.modal == "" {
-			if key == "alt+1" || key == "alt+2" || key == "alt+3" {
-				id := map[string]string{"alt+1": "jobs", "alt+2": "week", "alt+3": "playground"}[key]
-				return true, m.act(id)
-			}
 			if m.childShowing() {
 				_, cmd := m.childInput(msg)
 				return true, cmd
@@ -251,11 +240,6 @@ func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
 					}
 					if key == "?" {
 						m.help = true
-						return true, nil
-					}
-					if key == "m" {
-						m.mouse = !m.mouse
-						m.playground.SetMouse(m.mouse)
 						return true, nil
 					}
 				}
