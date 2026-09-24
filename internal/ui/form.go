@@ -48,8 +48,21 @@ type PickOption struct {
 }
 type Review struct {
 	Text string
+	Diff string
 	Data any
 }
+
+// Body is the plain-text equivalent for CLI output and other linear surfaces.
+func (r Review) Body() string {
+	if r.Diff == "" {
+		return r.Text
+	}
+	if r.Text == "" {
+		return r.Diff
+	}
+	return strings.TrimRight(r.Text, "\n") + "\n\n" + r.Diff
+}
+
 type FormSpec struct {
 	Title           string
 	Theme           string
@@ -117,6 +130,7 @@ type Form struct {
 	cancelRequested              bool
 	multilineValues              map[int]string
 	multiline                    *multilineDraft
+	presentation                 reviewPresentation
 }
 type formLive struct {
 	generation int
@@ -361,6 +375,12 @@ func (f *Form) closeSchedule() tea.Cmd {
 	return f.changed(f.spec.Fields[i].Key)
 }
 func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if f.finished {
+		if ready, ok := msg.(textEditorReady); ok && ready.cleanup != nil {
+			ready.cleanup()
+		}
+		return f, nil
+	}
 	switch m := msg.(type) {
 	case textEditorReady:
 		return f, f.launchTextEditor(m)
@@ -401,12 +421,17 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return f, nil
 	case formBuilt:
-		if m.owner != f || f.stage != "building" {
+		if m.owner != f || f.stage != "building" || f.finished {
 			return f, nil
 		}
 		if m.err != nil {
 			f.err = m.err
-			f.stage = "edit"
+			if f.initialReview {
+				f.stage = "result"
+				f.message = "Review could not be prepared. No write was sent."
+			} else {
+				f.stage = "edit"
+			}
 		} else {
 			f.review = m.review
 			f.stage = "review"
@@ -414,7 +439,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return f, nil
 	case formApplied:
-		if m.owner != f || f.stage != "applying" {
+		if m.owner != f || f.stage != "applying" || f.finished {
 			return f, nil
 		}
 		f.message = m.message
@@ -525,7 +550,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if f.stage == "edit" && len(f.inputs) > 0 {
 			f.move(delta)
 		} else {
-			f.scroll = max(0, f.scroll+delta*3)
+			f.scrollReview(delta * 3)
 		}
 		f.mousePress = ""
 		return f, nil
@@ -548,12 +573,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if key == "enter" || key == "q" || key == "esc" {
 				return f, f.finish()
 			}
-			if key == "down" || key == "j" {
-				f.scroll++
-			}
-			if key == "up" || key == "k" {
-				f.scroll = max(0, f.scroll-1)
-			}
+			f.reviewScrollKey(key)
 			return f, nil
 		}
 		if f.stage == "building" || f.stage == "applying" {
@@ -575,13 +595,17 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "n":
 				return f, f.activate("back")
 			case "down", "j":
-				f.scroll++
+				f.scrollReview(1)
 			case "up", "k":
-				f.scroll = max(0, f.scroll-1)
+				f.scrollReview(-1)
 			case "pgdown":
-				f.scroll += max(1, f.height-7)
+				f.scrollReview(f.modalLayout().body.h)
 			case "pgup":
-				f.scroll = max(0, f.scroll-max(1, f.height-7))
+				f.scrollReview(-f.modalLayout().body.h)
+			case "home", "g":
+				f.scroll = 0
+			case "end", "G":
+				f.scrollReview(len(f.reviewLines()))
 			}
 			return f, nil
 		}
@@ -760,6 +784,9 @@ func (f *Form) buttons() [][2]string {
 	}
 }
 func (f *Form) hits() []hitRegion {
+	if f.Modal() {
+		return f.modalLayout().hits
+	}
 	if f.height < 6 {
 		return nil
 	}
@@ -812,6 +839,14 @@ func (f *Form) View() tea.View {
 	}
 	if f.multiline != nil {
 		return f.multilineView()
+	}
+	if f.Modal() {
+		v := tea.NewView(f.modalView())
+		v.AltScreen = true
+		if f.spec.Mouse {
+			v.MouseMode = tea.MouseModeCellMotion
+		}
+		return v
 	}
 	t := styles(f.dark)
 	lines := []string{t.Title.Render(clip(f.spec.Title, f.width)), t.Muted.Render(clip("Tab next  ·  Shift+Tab back  ·  Ctrl+P browse", f.width))}

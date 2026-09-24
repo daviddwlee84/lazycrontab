@@ -56,6 +56,14 @@ Effective bindings drive both help and dispatch. Printable characters belong to 
 
 Forms use Tab/Shift+Tab, arrows or clickable controls for choices, `Ctrl+P`/Browse for target paths and `Ctrl+O` for advanced settings. Enter on Schedule opens the shared cron editor; F1 opens contextual concepts and returns to the same draft. `Ctrl+S` prepares a review; **`y` or another Ctrl+S applies, Enter does not approve**. Esc returns to the draft or cancels a standalone confirmation. Results remain visible until acknowledged. Job/source forms and host selection stay inside the dashboard; external editors and native SSH temporarily take terminal ownership.
 
+Review and save results open in a centered popup with the dashboard still visible.
+Enable/disable first shows the job and status transition, followed by the exact
+crontab diff. Added/removed lines and changed portions are highlighted; long lines
+wrap and can be scrolled with arrows/j/k, PgUp/PgDn or the mouse wheel. This renderer
+is built in and needs no external pager. The result names what was saved and its
+backup; uncertain writes stay explicitly uncertain. Enter acknowledges the result
+and returns to the same selection/filter. CLI `--json` retains structured receipts.
+
 `v` opens the selected source's original document, including comments and environment
 assignments. Use ↑↓/j/k or PgUp/PgDn to scroll, ←→/h/l for long lines, `/` to find,
 `n`/`N` for matches, `c` to copy the original bytes to the terminal clipboard, and
@@ -213,6 +221,14 @@ lazycrontab doctor --host all --json
 
 Pueue needs a 4.x CLI and reachable daemon on the job's host. Groups are selected from existing groups; the app does not create them or change parallelism. Unavailable Pueue choices are disabled with a reason. Scheduled wrappers use native Pueue and do not require lazycrontab on the target. Missing lazypueue only disables its separate handoff; set `lazypueue_connection` for a remote target.
 
+Newly generated Pueue jobs pass an absolute working directory through
+`--working-directory`, without repeating `cd` in the task. A plain command such as
+`echo "hi"` stays that command in Pueue and uses Pueue's configured shell (normally
+`sh -c`). An explicit crontab `SHELL`, per-job environment values, output redirects or cron `%` stdin
+require a wrapper to retain their semantics; unresolved `~/` directories retain
+target-side expansion. Existing stored commands are preserved when toggling or
+running a job. Pueue owns the [task working directory and shell invocation](https://github.com/Nukesor/pueue/blob/v4.0.2/pueue/src/daemon/process_handler/spawn.rs).
+
 Output preserves existing behavior by default. `--output PATH` appends stdout/stderr together; `--stderr PATH` separates stderr. Parent directories must exist. Pueue uses its own capture by default. Review shows the generated shell command and required cron percent escaping.
 
 For Pueue, the wizard hides empty output/error/log file fields and points to `pueue log` or lazypueue. Existing explicit paths remain visible and editable; switching runners never silently clears them. Explicit redirects apply to the queued task, so redirected output goes to those files instead of Pueue's capture. The task ID and errors from cron invoking `pueue add` remain separate from the task's output.
@@ -318,6 +334,7 @@ go build -o /tmp/lazycrontab-dev .
 python3 scripts/pty_smoke.py /tmp/lazycrontab-dev
 python3 scripts/pty_managed.py /tmp/lazycrontab-dev
 python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev
+python3 scripts/pty_review.py /tmp/lazycrontab-dev
 python3 scripts/pty_completion.py /tmp/lazycrontab-dev  # requires zsh
 ```
 

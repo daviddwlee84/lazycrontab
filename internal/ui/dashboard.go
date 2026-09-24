@@ -1173,7 +1173,11 @@ func (m *dashboard) View() tea.View {
 		contextLine += " · open draft"
 	}
 	var body string
-	if m.childShowing() {
+	var modal *Form
+	if form, ok := m.child.(*Form); ok && m.childShowing() && form.Modal() {
+		modal = form
+	}
+	if m.childShowing() && modal == nil {
 		body = m.child.View().Content
 	} else if m.view == "playground" && m.playground != nil && !m.help && !m.palette && m.modal == "" {
 		body = m.playground.View().Content
@@ -1232,9 +1236,14 @@ func (m *dashboard) View() tea.View {
 			x += w + 1
 		}
 		hint := "Tab focus · / search · : actions · ? help · q quit · m mouse"
-		body += "\n" + t.Muted.Render(clip(safe(status), m.width)) + "\n" + strings.Join(buttons, " ") + "\n" + t.Muted.Render(clip(hint, m.width))
+		body += "\n" + t.Muted.Render(clip(statusSummary(status), m.width)) + "\n" + strings.Join(buttons, " ") + "\n" + t.Muted.Render(clip(hint, m.width))
 	}
-	v := tea.NewView(fitLines(header+"\n"+t.Muted.Render(clip(contextLine, m.width))+"\n"+body, m.width, m.height))
+	content := fitLines(header+"\n"+t.Muted.Render(clip(contextLine, m.width))+"\n"+body, m.width, m.height)
+	if modal != nil {
+		box := modal.modalLayout().box
+		content = overlayText(content, modal.modalPanel(), box.x, box.y+2, m.width, m.height)
+	}
+	v := tea.NewView(content)
 	v.AltScreen = true
 	if m.mouse {
 		v.MouseMode = tea.MouseModeCellMotion

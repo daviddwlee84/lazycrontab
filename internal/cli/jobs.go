@@ -107,6 +107,7 @@ func addJobs(root *cobra.Command, o *options) {
 			if e != nil {
 				return e
 			}
+			original := j
 			var replacement *document.Job
 			if op != "remove" {
 				j.Enabled = op == "enable"
@@ -116,7 +117,7 @@ func addJobs(root *cobra.Command, o *options) {
 			if e != nil {
 				return e
 			}
-			return o.applyPlan(cmd, s, p)
+			return o.applyPlanReview(cmd, s, p, changeReview(p, original))
 		}
 		root.AddCommand(cmd)
 	}
@@ -138,6 +139,17 @@ type jobReview struct {
 	Plan   service.Plan
 	Recipe service.Recipe
 	Entry  service.Entry
+}
+
+func applyJobReview(ctx context.Context, s *service.Service, data jobReview) (service.Receipt, error) {
+	receipt, err := s.Apply(ctx, data.Plan)
+	if err != nil {
+		return receipt, err
+	}
+	if err = service.SaveRecipe(data.Entry, data.Recipe); err != nil {
+		return receipt, fmt.Errorf("crontab saved; helper metadata save failed: %w", err)
+	}
+	return receipt, nil
 }
 
 func addJobCommand(root *cobra.Command, o *options, op string) {
@@ -283,9 +295,10 @@ func addJobCommand(root *cobra.Command, o *options, op string) {
 		if err != nil {
 			return err
 		}
-		return o.approve(cmd, op+" job", review.Data.(jobReview).Plan, review.Text, func(ctx context.Context) (any, string, error) {
-			message, err := spec.Apply(ctx, values, review)
-			return map[string]any{"job_id": review.Data.(jobReview).Plan.JobID, "result": message}, message, err
+		return o.approveReview(cmd, op+" job", review.Data.(jobReview).Plan, review, func(ctx context.Context) (any, string, error) {
+			data := review.Data.(jobReview)
+			receipt, err := applyJobReview(ctx, s, data)
+			return jobJSONResult(data, receipt, err), receiptText(receipt, data.Plan.Operation, data.Plan.JobID), err
 		})
 	}
 	root.AddCommand(cmd)

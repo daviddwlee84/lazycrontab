@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep review/save results in dashboard popups with highlighted diffs, clear job status changes and human-readable receipts.
+- Simplify native Pueue task payloads and use its working-directory option without a duplicate `cd`.
+
 - Complete positional host/source/job/backup IDs and option values through native shell completion, with offline target-scoped job candidates and real Zsh Tab coverage.
 
 - Add raw source viewing (`v`) and reviewed editor handoff (`V`), with exact CLI export/replacement, line diagnostics and retained invalid drafts for repair.

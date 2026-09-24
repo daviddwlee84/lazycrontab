@@ -79,12 +79,12 @@ func addExecution(root *cobra.Command, o *options) {
 		if e != nil {
 			return e
 		}
-		return o.approve(cmd, "Run · "+j.Key(), r.Data, r.Text, func(ctx context.Context) (any, string, error) {
+		return o.approveReview(cmd, "Run · "+j.Key(), r.Data, r, func(ctx context.Context) (any, string, error) {
 			record, e := s.Run(ctx, r.Data.(service.ExecutionPlan))
 			if e != nil && record.ExitCode > 0 && record.ExitCode < 126 {
 				e = exitError{record.ExitCode, e}
 			}
-			return record, pretty(record), e
+			return record, runRecordText(record), e
 		})
 	}}
 	run.Flags().StringVar(&runner, "runner", "", "Override direct or pueue")
@@ -163,9 +163,9 @@ func addExecution(root *cobra.Command, o *options) {
 		if string(after) == draft.Before {
 			return nil
 		}
-		return o.approve(cmd, "Save script · "+j.Host+":"+path, map[string]string{"diff": service.Diff(draft.Before, string(after))}, service.Diff(draft.Before, string(after)), func(ctx context.Context) (any, string, error) {
+		return o.approveReview(cmd, "Save script · "+j.Host+":"+path, map[string]string{"diff": service.Diff(draft.Before, string(after))}, ui.Review{Text: "Script: " + path, Diff: service.Diff(draft.Before, string(after))}, func(ctx context.Context) (any, string, error) {
 			r, e := s.SaveScript(ctx, draft, string(after))
-			return r, pretty(r), e
+			return r, receiptText(r, "script", j.ID), e
 		})
 	}}
 	edit.Flags().StringVar(&scriptPath, "path", "", "Explicit target-side script path")
@@ -236,10 +236,11 @@ func (o *options) editManagedScript(cmd *cobra.Command, s *service.Service, j se
 	if err != nil {
 		return err
 	}
-	review.Text = "Script content changes\n" + service.Diff(before, after) + "\n\n" + review.Text
-	return o.approve(cmd, "Save managed script · "+j.Key(), review.Data.(jobReview).Plan, review.Text, func(ctx context.Context) (any, string, error) {
-		message, err := spec.Apply(ctx, values, review)
-		return map[string]any{"job_id": review.Data.(jobReview).Plan.JobID, "result": message}, message, err
+	review.Diff = "Script content changes\n" + service.Diff(before, after) + "\nCrontab changes\n" + review.Diff
+	return o.approveReview(cmd, "Save managed script · "+j.Key(), review.Data.(jobReview).Plan, review, func(ctx context.Context) (any, string, error) {
+		data := review.Data.(jobReview)
+		receipt, err := applyJobReview(ctx, s, data)
+		return jobJSONResult(data, receipt, err), receiptText(receipt, data.Plan.Operation, data.Plan.JobID), err
 	})
 }
 
@@ -281,9 +282,9 @@ func addBackup(root *cobra.Command, o *options) {
 					return err
 				}
 				defer os.Remove(draft.File)
-				return o.approve(cmd, "Restore script · "+b.Host+":"+b.FilePath, b, service.Diff(draft.Before, b.Content), func(ctx context.Context) (any, string, error) {
+				return o.approveReview(cmd, "Restore script · "+b.Host+":"+b.FilePath, b, ui.Review{Text: "Script: " + b.FilePath, Diff: service.Diff(draft.Before, b.Content)}, func(ctx context.Context) (any, string, error) {
 					r, e := s.SaveScript(ctx, draft, b.Content)
-					return r, pretty(r), e
+					return r, receiptText(r, "restore", ""), e
 				})
 			}
 		}

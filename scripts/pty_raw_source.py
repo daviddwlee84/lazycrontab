@@ -249,7 +249,7 @@ echo 'RAW EDITOR HANDOFF'
             check_editor(remote_raw)
             assert remote.read_bytes() == remote_raw and not backups()
             mark = session.mark(); session.send("y")
-            session.expect('"status": "saved"', mark)
+            session.expect("Saved", mark)
             session.close(b"\r")
         check_draft_removed()
         assert remote.read_bytes() == replacement and local.read_bytes() == local_raw
@@ -326,7 +326,7 @@ echo 'RAW EDITOR HANDOFF'
                         session.close(b"\x1b")
                     else:
                         mark = session.mark(); session.send("y")
-                        session.expect('"status": "saved"', mark)
+                        session.expect("Saved", mark)
                         session.close(b"\r")
                 check_draft_removed()
             assert local.read_bytes() == (repaired if outcome == "apply" else previous)

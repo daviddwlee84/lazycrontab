@@ -395,18 +395,12 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		if managedPlan != nil {
 			scriptPreview = "\n\nManaged script content\n" + managedPlan.Content + "\nSaved only when you Apply; previous versions are retained."
 		}
-		return ui.Review{Text: targetHost + " / " + targetSource + "\n" + describeJobExecution(recipe, v["command"]) + "\n\nSchedule: " + job.Schedule + "\n" + preview + scriptPreview + checks + "\n\nCrontab changes\n" + plan.Diff + "\n" + strings.Join(plan.Warnings, "\n"), Data: jobReview{plan, recipe, entry}}, nil
+		return ui.Review{Text: targetHost + " / " + targetSource + "\n" + describeJobExecution(recipe, v["command"]) + "\n\nSchedule: " + job.Schedule + "\n" + preview + scriptPreview + checks + "\n" + strings.Join(plan.Warnings, "\n"), Diff: plan.Diff, Data: jobReview{plan, recipe, entry}}, nil
 	}
 	apply := func(ctx context.Context, _ map[string]string, review ui.Review) (string, error) {
 		data := review.Data.(jobReview)
-		receipt, err := s.Apply(ctx, data.Plan)
-		if err != nil {
-			return pretty(receipt), err
-		}
-		if err = service.SaveRecipe(data.Entry, data.Recipe); err != nil {
-			return pretty(receipt), fmt.Errorf("crontab saved; helper metadata save failed: %w", err)
-		}
-		return pretty(receipt) + "\nJob ID: " + data.Plan.JobID, nil
+		receipt, err := applyJobReview(ctx, s, data)
+		return receiptText(receipt, data.Plan.Operation, data.Plan.JobID), err
 	}
 	chosenHost := func(v map[string]string) string {
 		if v["host"] != "" {

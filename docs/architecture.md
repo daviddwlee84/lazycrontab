@@ -14,6 +14,12 @@ edit automatically creates IDs, rewrites helper metadata or deletes script files
 
 Write path: snapshot → plan/diff → review → revision check → private original-content backup → native install/regular-file replacement → read-back receipt. A client-side source lock coordinates cooperating processes, not external editors or other workstations. Unknown outcomes are reconciled before retry.
 
+The shared form renders review/apply/result as an opaque popup over the retained
+dashboard, with one input owner and explicit acknowledgement before refresh.
+Review text and raw diffs are separate presentation fields; a built-in renderer
+wraps and highlights changes without invoking a pager. Human save/run summaries
+do not replace machine receipts or collapse partial/unknown outcomes into success.
+
 Stable job IDs live in versioned comments. Optional local helper sidecars bind to target/source/job and command digest; emitted cron/Pueue commands execute without them. Reads do not assign durable IDs. Ordinary comments remain comments; only the dedicated disabled-entry marker identifies managed disabled jobs.
 
 Effects return messages; the UI owns mutable state. Source reads use target/generation identities. Child completion and editor previews include model ownership, so old replies cannot close or update a new draft. Forms debounce/cancel discovery, preserve user edits when suggestions arrive, and cache previews outside View. Nested concept help has its own completion event. Dispatched writes are reconciled even when result/sidecar persistence fails; they are never blindly retried.

@@ -2,6 +2,30 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Review popup and Pueue command revision
+
+The full race suite, vet and source build passed on macOS arm64 and Linux arm64
+(Go 1.26.6 in a disposable container). Final UI race checks and the review PTY
+also passed on both after the acknowledgement-footer fix. The general,
+managed-script and raw-source PTY harnesses passed on both with the new popup
+coordinates and human result text.
+
+`scripts/pty_review.py` verifies the dashboard remains behind the popup after a
+full repaint, Enter never submits a review, outside clicks/wheels do not reach
+the dashboard, repeated confirmation writes once, resize preserves the target,
+and result acknowledgement retains selection/filter. Cancellation leaves the
+source unchanged; an external edit produces a readable conflict without retry.
+Model tests also cover full scrollable errors, multiline acknowledgement status,
+late messages, dispatched-write cancellation, Unicode wrapping/hit geometry and
+`NO_COLOR`. VHS review/result/return and narrow screenshots were visually checked.
+
+Pueue compiler tests capture native argv and execute harmless fixture payloads
+to verify plain commands, working-directory metadata, quotes/percent handling,
+explicit shell selection, per-job environment, stdin, redirects and script
+arguments. Existing stored-command behavior remains covered. Receipt tests
+preserve full machine result data and distinguish saved/failed/unknown outcomes.
+No real Pueue daemon task was submitted; terminal checks use fixture backends.
+
 ## Shell completion revision
 
 The full race suite, vet and source build passed on macOS arm64 and Linux arm64

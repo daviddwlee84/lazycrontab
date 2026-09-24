@@ -16,6 +16,7 @@ Checks:
 - `python3 scripts/pty_smoke.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_managed.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev`
+- `python3 scripts/pty_review.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_completion.py /tmp/lazycrontab-dev` (requires zsh)
 
 Use isolated XDG roots and fixture backends. Never modify the developer's actual
@@ -38,6 +39,9 @@ Background effects return messages; UI state belongs to the model. Check late
 results against target/generation and model ownership. Nested help completion
 must not close its containing workflow. Let typing/paste own printable keys.
 Render and mouse hit regions share layout; overlays consume mouse events.
+Review/apply/result forms are modal popups over the dashboard. Structured review
+diffs use the built-in renderer; human receipts must preserve unknown/partial
+outcomes, while JSON output keeps its structured data contract.
 Execute owns the signal context; Bubble Tea uses WithoutSignalHandler.
 
 Host discovery is static OpenSSH alias inventory or typed dev JSON, not shared

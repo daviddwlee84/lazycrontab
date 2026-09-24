@@ -20,11 +20,11 @@ func runFormSpec(s *service.Service, snap service.Snapshot, j service.Entry, rec
 				override = &r
 			}
 			p, err := s.RunPlan(ctx, snap, j.ID, override)
-			return ui.Review{Text: pretty(p), Data: p}, err
+			return ui.Review{Text: runPlanText(p), Data: p}, err
 		},
 		Apply: func(ctx context.Context, _ map[string]string, r ui.Review) (string, error) {
 			record, err := s.Run(ctx, r.Data.(service.ExecutionPlan))
-			return pretty(record), err
+			return runRecordText(record), err
 		},
 		LoadKeys: []string{"runner"}, Load: func(ctx context.Context, v map[string]string) []ui.FieldUpdate {
 			if v["runner"] == "pueue" {
@@ -62,6 +62,7 @@ func newChangeModel(ctx context.Context, s *service.Service, r ui.WorkflowReques
 	if err != nil {
 		return nil, err
 	}
+	original := j
 	op := r.Action
 	var plan service.Plan
 	if op == "remove" {
@@ -79,11 +80,11 @@ func newChangeModel(ctx context.Context, s *service.Service, r ui.WorkflowReques
 	}
 	return ui.NewReviewForm(ctx, ui.FormSpec{Title: op + " · " + r.Host + "/" + r.Source, Theme: s.Config.Theme, Mouse: s.Config.Mouse,
 		Build: func(context.Context, map[string]string) (ui.Review, error) {
-			return ui.Review{Text: plan.Diff, Data: plan}, nil
+			return changeReview(plan, original), nil
 		},
 		Apply: func(ctx context.Context, _ map[string]string, review ui.Review) (string, error) {
 			receipt, err := s.Apply(ctx, review.Data.(service.Plan))
-			return pretty(receipt), err
+			return receiptText(receipt, plan.Operation, r.JobID), err
 		},
 	}), nil
 }

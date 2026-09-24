@@ -110,6 +110,13 @@ The helpers pin executable paths and working directories. Add **Variables**
 for explicit per-job values if needed; these do not alter other jobs. Values are
 literal: `$HOME` in a variable value is not silently expanded.
 
+For newly generated Pueue jobs, an absolute directory is passed through
+`--working-directory`. Plain commands use Pueue's configured shell (Unix default
+`sh -c`) without an extra `cd` or shell layer. Explicit crontab `SHELL`, per-job
+variables, output redirects and cron `%` stdin keep the necessary shell wrapper.
+Choosing a script interpreter still pins that interpreter. Toggling a job or
+running its stored command does not rebuild existing wrappers.
+
 No `.zshrc`, login profile, virtualenv activation script or `.env` file is
 automatically sourced. `.zshrc` is for interactive zsh; choosing zsh or a login
 shell does not reproduce an interactive terminal. See the [zsh startup-file

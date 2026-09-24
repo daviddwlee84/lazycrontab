@@ -10,6 +10,18 @@ import (
 )
 
 func (m *dashboard) childShowing() bool { return m.child != nil && m.childView == m.view }
+
+// The footer owns one row. Full receipts and diagnostics remain in their
+// scrollable popup; acknowledgement carries only a compact status summary.
+func statusSummary(message string) string {
+	for _, line := range strings.Split(safe(message), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return strings.ReplaceAll(line, "\t", " ")
+		}
+	}
+	return ""
+}
+
 func (m *dashboard) openWorkflow(action, expression string) tea.Cmd {
 	m.mousePress = ""
 	m.help = false
@@ -74,6 +86,14 @@ func offsetMouse(msg tea.Msg, dy int) tea.Msg {
 // routeSurface leaves asynchronous snapshot messages with the dashboard while
 // the focused workflow owns keyboard, paste and mouse input.
 func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
+	if form, ok := m.child.(*Form); ok && m.childShowing() && form.Modal() {
+		switch msg.(type) {
+		case tea.KeyPressMsg, tea.PasteMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
+			m.mousePress = ""
+			_, cmd := m.childInput(msg)
+			return true, cmd
+		}
+	}
 	if _, isSource := m.child.(*SourceView); isSource && m.childShowing() {
 		switch msg.(type) {
 		case tea.KeyPressMsg, tea.PasteMsg, tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseWheelMsg, tea.MouseMotionMsg:
@@ -104,7 +124,7 @@ func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
 		}
 		m.childPending = false
 		if v.err != nil {
-			m.status = v.err.Error()
+			m.status = statusSummary(v.err.Error())
 			m.modal = v.err.Error()
 			m.modalScroll = 0
 			if m.childCancel != nil {
@@ -131,19 +151,19 @@ func (m *dashboard) routeSurface(msg tea.Msg) (bool, tea.Cmd) {
 			m.childCancel()
 			m.childCancel = nil
 		}
-		m.status = v.Message
+		m.status = statusSummary(v.Message)
 		if errors.Is(v.Err, ErrCancelled) && !v.Changed {
 			m.status = "Draft closed"
 		} else if v.Err != nil {
-			m.status = v.Err.Error()
+			m.status = statusSummary(v.Err.Error())
 		}
 		if v.Changed {
 			_, cmd := m.Update(handoffMsg{})
 			if v.Message != "" {
-				m.status = v.Message
+				m.status = statusSummary(v.Message)
 			}
 			if v.Err != nil && !errors.Is(v.Err, ErrCancelled) {
-				m.status = v.Err.Error()
+				m.status = statusSummary(v.Err.Error())
 			}
 			return true, cmd
 		}

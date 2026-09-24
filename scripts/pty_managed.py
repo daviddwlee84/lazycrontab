@@ -116,12 +116,12 @@ echo 'FIXTURE EDITOR HANDOFF'
             mark = session.mark()
             session.send(b"\x13")
             session.expect("Managed script content", mark)
-            session.expect("Review target and changes", mark)
+            session.expect("Enter does not apply", mark)
 
         def apply(session):
             mark = session.mark()
             session.send("y")
-            session.expect('"status": "saved"', mark)
+            session.expect("Saved", mark)
 
         def editor_handoff(session, content):
             Path(env["FIXTURE_EDITOR_CONTENT"]).write_bytes(content)
@@ -213,6 +213,7 @@ echo 'FIXTURE EDITOR HANDOFF'
                 args += ["--path", str(second)]
             with terminal(binary, args, env, root) as session:
                 session.expect("Save managed script")
+                session.send(b"\x1b[6~")
                 session.expect("Script content changes")
                 assert cron.read_bytes() == before_cron and scripts() == before_scripts, "script editor wrote before review"
                 if save:

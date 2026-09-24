@@ -226,16 +226,18 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             session.send(b"\r")
             session.pump()
             assert cron.read_text()==before, "Enter applied a default-No review"
-            session.click(20,30)
+            # At 120x32 the embedded review panel is centered beneath the
+            # dashboard header; Back/Apply/Close live inside that panel.
+            session.click(10,28)
             session.pump()
             mark=session.mark();session.click(5,30)
             session.expect("proposed",mark)
-            mark=session.mark();session.click(5,30)
-            session.expect("saved",mark)
+            mark=session.mark();session.click(24,28)
+            session.expect("Saved",mark)
             assert "PTY backup" in cron.read_text()
             assert "fixture remark" in cron.read_text(), "typed remark was lost"
             assert '"id":"seed"' in cron.read_text(), "Add replaced the selected existing job"
-            mark=session.mark();session.click(5,30)
+            mark=session.mark();session.click(10,28)
             session.expect("PTY backup",mark)
             session.pump(0.5)
 
@@ -259,7 +261,7 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             mark=session.mark();session.send("E")
             session.expect("Save script",mark)
             mark=session.mark();session.send("y")
-            session.expect("saved",mark)
+            session.expect("Saved",mark)
             assert "edited by PTY" in script.read_text()
             assert script.stat().st_mode & 0o777 == 0o750
             session.send(b"\r");session.pump(0.5)

@@ -194,8 +194,11 @@ func (o *options) emit(cmd *cobra.Command, data any, human string) error {
 }
 func pretty(v any) string { b, _ := json.MarshalIndent(v, "", "  "); return string(b) }
 func (o *options) approve(cmd *cobra.Command, title string, plan any, body string, apply func(context.Context) (any, string, error)) error {
+	return o.approveReview(cmd, title, plan, ui.Review{Text: body}, apply)
+}
+func (o *options) approveReview(cmd *cobra.Command, title string, plan any, review ui.Review, apply func(context.Context) (any, string, error)) error {
 	if o.dry {
-		return o.emit(cmd, plan, body)
+		return o.emit(cmd, plan, review.Body())
 	}
 	if o.yes {
 		result, message, e := apply(cmd.Context())
@@ -209,11 +212,23 @@ func (o *options) approve(cmd *cobra.Command, title string, plan any, body strin
 	if o.json || !tty() {
 		return usage("this operation requires --yes; use --dry-run to review first")
 	}
-	_, e := ui.Confirm(cmd.Context(), title, body, func(ctx context.Context) (string, error) { _, message, e := apply(ctx); return message, e })
+	_, e := ui.RunFormReview(cmd.Context(), ui.FormSpec{Title: title,
+		Build: func(context.Context, map[string]string) (ui.Review, error) { return review, nil },
+		Apply: func(ctx context.Context, _ map[string]string, _ ui.Review) (string, error) {
+			_, message, e := apply(ctx)
+			return message, e
+		},
+	})
 	return e
 }
 func (o *options) applyPlan(cmd *cobra.Command, s *service.Service, p service.Plan) error {
-	return o.approve(cmd, p.Operation+" · "+p.Host+"/"+p.Source, p, p.Diff+strings.Join(p.Warnings, "\n"), func(ctx context.Context) (any, string, error) { r, e := s.Apply(ctx, p); return r, pretty(r), e })
+	return o.applyPlanReview(cmd, s, p, ui.Review{Text: "Target: " + p.Host + "/" + p.Source + "\n" + strings.Join(p.Warnings, "\n"), Diff: p.Diff, Data: p})
+}
+func (o *options) applyPlanReview(cmd *cobra.Command, s *service.Service, p service.Plan, review ui.Review) error {
+	return o.approveReview(cmd, p.Operation+" · "+p.Host+"/"+p.Source, p, review, func(ctx context.Context) (any, string, error) {
+		r, e := s.Apply(ctx, p)
+		return r, receiptText(r, p.Operation, p.JobID), e
+	})
 }
 func exactArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {

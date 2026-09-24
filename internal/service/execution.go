@@ -196,6 +196,13 @@ func Compile(e Entry, r Recipe) (string, error) {
 		shell = "/bin/sh"
 	}
 	payload := commandJoin([]string{shell, "-c", code})
+	if r.Runner == "pueue" && e.Environment["SHELL"] == "" && len(r.Environment) == 0 && input == "" && r.Output == "" && r.Stderr == "" && !strings.HasPrefix(r.Directory, "~") {
+		// Pueue owns shell execution (Unix default: sh -c), so a plain queued
+		// command needs no second shell. Explicit cron SHELL, per-job env,
+		// stdin and redirects retain the wrapper that defines their scope.
+		// See Pueue v4 client/commands/add.rs and daemon/process_handler/spawn.rs.
+		payload = code
+	}
 	if len(r.Environment) > 0 {
 		args := []string{"env"}
 		for _, key := range sortedKeys(r.Environment) {
@@ -209,7 +216,9 @@ func Compile(e Entry, r Recipe) (string, error) {
 	if input != "" {
 		payload = "printf '%s' " + commandQuote(input) + " | " + payload
 	}
-	if r.Directory != "" {
+	// Pueue applies an absolute working-directory before spawning the task.
+	// Legacy ~/ paths still need target HOME expansion inside the payload.
+	if r.Directory != "" && (r.Runner != "pueue" || strings.HasPrefix(r.Directory, "~")) {
 		payload = "cd " + commandPath(r.Directory) + " && " + payload
 	}
 	if r.Output != "" || r.Stderr != "" {
