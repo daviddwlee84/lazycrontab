@@ -15,6 +15,7 @@ import sys
 import tempfile
 
 from pty_smoke import Session
+from pty_screen import SessionScreen
 
 
 @contextmanager
@@ -164,17 +165,18 @@ echo 'RAW EDITOR HANDOFF'
         # A viewer owns its events: tabs and source rows underneath it must not
         # become active after clicks; both scroll axes and resizing remain usable.
         with terminal(binary, base, env, root) as session:
+            screen = SessionScreen(session, 120, 40)
             session.expect("Local visible task")
-            mark = session.mark(); session.send("v")
-            session.expect("Raw source", mark)
-            session.expect("local/user", mark)
-            session.expect("LOCAL_RAW_HEADER", mark)
-            session.expect('MAILTO="cron@example.test"', mark)
-            mark = session.mark(); session.send(b"\x1b[C" * 32)
-            session.expect("FAR_RIGHT_MARKER", mark)
+            session.send("v")
+            screen.expect("Raw source · local/user", "LOCAL_RAW_HEADER", 'MAILTO="cron@example.test"')
+            # Pan can reuse matching cells from an earlier frame, so verify
+            # the visible marker rather than require one contiguous PTY write.
+            session.send(b"\x1b[C" * 32)
+            screen.expect("FAR_RIGHT_MARKER")
             session.send(b"\x1b[D" * 32)
-            mark = session.mark(); session.send(b"\x1b[6~" * 4)
-            session.expect("BOTTOM_MARKER", mark)
+            screen.expect("LOCAL_RAW_HEADER", 'MAILTO="cron@example.test"')
+            session.send(b"\x1b[6~" * 4)
+            screen.expect("BOTTOM_MARKER")
             mark = session.mark(); session.send("/V"); session.pump(0.2)
             assert b"RAW EDITOR HANDOFF" not in session.output[mark:] and not Path(env["FIXTURE_EDITOR_DRAFT"]).exists(), "viewer find treated V as Edit"
             session.send(b"\x1b"); session.pump(0.2)
@@ -182,38 +184,40 @@ echo 'RAW EDITOR HANDOFF'
             session.click(42, 0)
             session.wheel(30, 10)
             for size in ((80, 24), (40, 12), (120, 40)):
+                resize_mark = session.mark()
                 session.resize(*size); session.pump(0.2)
-            mark = session.mark(); session.send(b"\x1b")
-            session.expect("Local visible task", mark)
+            # The final resize emits a full frame at the restored dimensions.
+            screen = SessionScreen(session, 120, 40, offset=resize_mark)
+            session.send(b"\x1b")
+            screen.expect("Local visible task")
             # Typing owns V; a filtered empty list still has an explicit source.
             mark = session.mark(); session.send("/zzzzV"); session.pump(0.3)
             assert b"RAW EDITOR HANDOFF" not in session.output[mark:]
             assert not Path(env["FIXTURE_EDITOR_DRAFT"]).exists()
             session.send(b"\r")
-            mark = session.mark(); session.send("v")
-            session.expect("Raw source", mark)
-            session.expect("LOCAL_RAW_HEADER", mark)
+            session.send("v")
+            screen.expect("Raw source · local/user", "LOCAL_RAW_HEADER")
             session.send(b"\x1b"); session.pump(0.2)
             session.close()
 
         # Empty local and remote sources are viewable independently of jobs.
         for host in ("local", "lab"):
             with terminal(binary, [*base, "--host", host, "--source", "empty"], env, root) as session:
+                screen = SessionScreen(session, 120, 40)
                 session.expect(f"{host}/empty")
-                mark = session.mark(); session.send("v")
-                session.expect("Raw source", mark)
-                session.expect(f"{host}/empty", mark)
+                session.send("v")
+                screen.expect(f"Raw source · {host}/empty")
                 session.send(b"\x1b"); session.pump(0.2)
                 session.close()
 
         # All uses the selected matching job; an empty filtered fleet must not
         # silently fall back to whichever source happened to be first.
         with terminal(binary, [*base, "--host", "all"], env, root) as session:
+            screen = SessionScreen(session, 120, 40)
             session.expect("Remote visible")
             session.send("/Remote visible\r"); session.pump(0.3)
-            mark = session.mark(); session.send("v")
-            session.expect("Raw source", mark)
-            session.expect("REMOTE_RAW_HEADER", mark)
+            session.send("v")
+            screen.expect("Raw source · lab/user", "REMOTE_RAW_HEADER")
             session.send(b"\x1b"); session.pump(0.2)
             session.send(b"/\x01\x0bzzzz\r"); session.pump(0.3)
             mark = session.mark(); session.send("vV"); session.pump(0.5)
@@ -272,9 +276,10 @@ echo 'RAW EDITOR HANDOFF'
         # Read-only system sources expose viewing while keeping Edit unavailable.
         Path(env["FIXTURE_EDITOR_DRAFT"]).unlink()
         with terminal(binary, [*base, "--source", "system"], env, root) as session:
+            screen = SessionScreen(session, 120, 40)
             session.expect("local/system")
-            mark = session.mark(); session.send("v")
-            session.expect("READONLY_SYSTEM_HEADER", mark)
+            session.send("v")
+            screen.expect("Raw source · local/system", "READONLY_SYSTEM_HEADER")
             mark = session.mark(); session.send("V"); session.pump(0.3)
             assert b"RAW EDITOR HANDOFF" not in session.output[mark:] and not Path(env["FIXTURE_EDITOR_DRAFT"]).exists()
             session.send(b"\x1b"); session.pump(0.2)

@@ -19,6 +19,8 @@ import tempfile
 import termios
 import time
 
+from pty_screen import SessionScreen
+
 
 class Session:
     def __init__(self, binary, args, env, cwd, cols=120, rows=32):
@@ -177,8 +179,10 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             session.send(b"\x1b")
             session.pump()
             for size in ((80,24),(40,12),(120,32)):
+                frame_start = len(session.output)
                 session.resize(*size)
                 session.pump()
+            screen = SessionScreen(session, 120, 32, offset=frame_start)
 
             # A true Playground tab can be left directly. Typing owns numbers;
             # Esc leaves the field before ordinary page shortcuts are active.
@@ -189,8 +193,8 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             mark=session.mark();session.send("3")
             session.expect("F1 Fields",mark)
             session.send(b"\r\x01\x0b12")  # edit minute, Home, delete to end
-            session.pump(0.3)
-            session.expect("12 9 * * 1-5",mark)
+            # An edited minute may retain the rest of the expression's cells.
+            screen.expect("12 9 * * 1-5", "F1 Fields")
             mark=session.mark();session.send(b"\x1b1");session.pump(0.2)
             assert b"Seed task" not in session.output[mark:], "Alt+1 still changed the page"
             session.send(b"\x1b");session.pump(0.2)
@@ -208,7 +212,9 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             mark=session.mark();session.send(b"\x1b")
             session.pump(0.2);session.resize(121,32)
             session.expect("12 9 * * 1-5",mark)
+            frame_start = len(session.output)
             session.resize(120,32);session.pump(0.2)
+            screen = SessionScreen(session, 120, 32, offset=frame_start)
             assert cron.read_text()==before,"Playground draft cancellation changed cron"
             # The header tabs are actual mouse targets, including while editing.
             mark=session.mark();session.click(17,0)
@@ -243,8 +249,10 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             assert "PTY backup" in cron.read_text()
             assert "fixture remark" in cron.read_text(), "typed remark was lost"
             assert '"id":"seed"' in cron.read_text(), "Add replaced the selected existing job"
-            mark=session.mark();session.click(10,28)
-            session.expect("PTY backup",mark)
+            session.click(10,28)
+            # The refreshed job row may already be visible behind the receipt.
+            # Observe its retained cells and wait for the popup to disappear.
+            screen.expect("PTY backup", "Tab focus", absent=("Close Enter", "open draft"))
             session.pump(0.5)
 
             before=cron.read_text();mark=session.mark();session.send("d")
