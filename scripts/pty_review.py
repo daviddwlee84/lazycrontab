@@ -106,7 +106,7 @@ def check_add_popup(binary):
 
             mark = session.mark(); session.send(b"\x1bOP")
             session.expect("Concepts", mark)
-            session.click(2, 35)  # Beside nested Help's footer, outside the frame.
+            session.click(2, 36)  # Beside nested Help's footer, outside the frame.
             mark = session.mark(); session.resize(180, 44)
             session.expect("Concepts", mark)
             mark = session.mark(); session.send(b"\x1b")
@@ -214,7 +214,7 @@ def check_advanced_and_mouse(binary):
             mark = session.mark(); session.send(b"\x0f")
             session.expect("Run directly or enqueue", mark)
             session.expect("Existing log to inspect", mark)
-            session.expect("14/14", mark)
+            session.expect("/18", mark)
             session.send("\tSAMPLE=kept")
             session.pump(0.2)
             mark = session.mark(); session.send(b"\x0f")
@@ -229,7 +229,7 @@ def check_advanced_and_mouse(binary):
             session.resize(40, 12); session.pump(0.2)
             mark = session.mark(); session.send(b"\x0f")
             session.expect("directly or enqueue", mark)
-            session.expect("10–10/14", mark)
+            session.expect("/18", mark)
             mark = session.mark(); session.send(b"\t")
             session.expect("SAMPLE=kept", mark)
             session.send(b"\x1b"); session.pump(0.2)

@@ -2,6 +2,30 @@
 
 Executed against isolated fixtures; no live user crontab or Pueue job was changed.
 
+## Stable form rows and navigation revision
+
+The full race suite, vet and source build passed on macOS arm64 and Linux arm64
+(Go 1.26.6 in a disposable container). Final UI race checks and the stable-form,
+review/draft/Advanced/mouse, general, managed-script and raw-source PTY harnesses
+passed on both. `scripts/pty_stable_form.py` reads emitted terminal cells and waits
+for actual focus/value updates, rather than assuming a fixed render delay. At
+120×54, 80×24 and 40×12 it compares popup bounds and runner screen rows before and
+after direct/Pueue changes without resizing the terminal to force a layout pass.
+
+Coverage includes ↑↓ navigation versus ←→ choice changes, text j/k ownership,
+shared payload positions, blank inactive script details, disabled row skipping
+and mouse rejection, downward Advanced growth, preserved values, and clearing
+then refilling an existing Pueue output before blur. Model tests cover row/input
+identity, all-disabled forms, late picker/editor results and unrelated async
+defaults during a latched edit. CLI tests prove invalid inactive values cannot
+affect any preset, metadata-only edits retain pinned commands, legacy script
+metadata and explicit redirects remain compatible, and managed versions survive
+switching back to commands. Async discovery also ignores inactive draft values.
+
+Same-viewport direct/Pueue VHS screenshots were visually compared at all three
+sizes. The VT grid checks use simple fixture text; Unicode cell boundaries remain
+covered by the model tests. No user scripts or real Pueue tasks were run.
+
 ## Advanced layout and mouse preference revision
 
 UI/CLI/config race tests, vet and source build passed on macOS arm64 and Linux

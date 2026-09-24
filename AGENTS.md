@@ -17,6 +17,7 @@ Checks:
 - `python3 scripts/pty_managed.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_review.py /tmp/lazycrontab-dev`
+- `python3 scripts/pty_stable_form.py /tmp/lazycrontab-dev`
 - `python3 scripts/pty_completion.py /tmp/lazycrontab-dev` (requires zsh)
 
 Use isolated XDG roots and fixture backends. Never modify the developer's actual
@@ -40,11 +41,19 @@ results against target/generation and model ownership. Nested help completion
 must not close its containing workflow. Let typing/paste own printable keys.
 Render and mouse hit regions share layout; overlays consume mouse events.
 Add/Edit job drafts use an opt-in embedded popup, including their nested editors
-and pickers. Advanced resizes to available height and reveals its first new field;
-capped forms expose their visible range. Popup input never reaches the dashboard.
+and pickers. Stored inputs, rendered rows and focusable fields are distinct:
+payload types share a slot, inactive script details reserve blank rows, and
+runner-dependent rows stay visible but disabled. Up/down navigates fields;
+left/right changes choices. Geometry and hit regions use the same row model.
+The popup top is anchored to its maximum expanded structure; Advanced grows
+downward and reveals its first new field. Capped forms expose their visible range.
+Popup input never reaches the dashboard.
 Mouse defaults on and is controlled only by config; no m or Alt+1/2/3 shortcuts
 are built in. Reload propagates mouse settings to retained surfaces and clears
 pending clicks. Standalone wizard layout is unchanged.
+Job review projects the selected preset/runner without erasing other draft values;
+inactive edits must not recompile an otherwise unchanged stored command. Preserve
+legacy command script metadata and explicit Pueue redirects.
 Review/apply/result forms are modal popups over the dashboard. Structured review
 diffs use the built-in renderer; human receipts must preserve unknown/partial
 outcomes, while JSON output keeps its structured data contract.

@@ -18,11 +18,19 @@ The shared form renders review/apply/result as an opaque popup over the retained
 dashboard, with one input owner and explicit acknowledgement before refresh.
 Job drafts opt into the same popup presentation when embedded; their nested
 editors and pickers use the frame's inner dimensions and translated input.
-Draft height follows visible fields; Advanced reveals its first new field and
-capped forms remain scrollable. Popups own input until completion or cancellation.
+Drafts keep stored inputs separate from rendered rows and focusable fields.
+Shared slots coalesce mutually exclusive inputs, reserved hidden rows render
+blank, and disabled rows retain an explanation without input actions. Rendering,
+mouse hit regions and scrolling share those rows. The popup's top edge is based
+on its maximum expanded structure; Advanced grows downward and reveals its first
+new field. Capped forms remain scrollable. Popups own input until completion or cancellation.
 Standalone wizards keep their existing layout. Mouse capture follows the XDG
 setting across config reloads, including retained editors; there is no session
 toggle or built-in Alt view-switching binding.
+Job planning projects only values applicable to the chosen preset/runner while
+retaining other draft inputs. Unchanged effective execution preserves installed
+commands and pinned runtime/Pueue paths; legacy command script metadata remains
+an explicit exception to inactive script input filtering.
 Review text and raw diffs are separate presentation fields; a built-in renderer
 wraps and highlights changes without invoking a pager. Human save/run summaries
 do not replace machine receipts or collapse partial/unknown outcomes into success.

@@ -10,13 +10,16 @@ import (
 
 func runFormSpec(s *service.Service, snap service.Snapshot, j service.Entry, recipe service.Recipe, forceOverride bool) ui.FormSpec {
 	return ui.FormSpec{Title: "Run · " + j.Key(), Theme: s.Config.Theme, Mouse: s.Config.Mouse,
-		Fields: []ui.Field{{Key: "runner", Label: "Execute via", Value: recipe.Runner, Options: []string{"direct", "pueue"}}, {Key: "group", Label: "Existing Pueue group (empty=default)", Value: recipe.Group, Show: func(v map[string]string) bool { return v["runner"] == "pueue" }}},
+		Fields: []ui.Field{{Key: "runner", Label: "Execute via", Value: recipe.Runner, Options: []string{"direct", "pueue"}}, {Key: "group", Label: "Existing Pueue group (empty=default)", Value: recipe.Group, DisabledWhen: pueueGroupDisabled}},
 		Build: func(ctx context.Context, v map[string]string) (ui.Review, error) {
 			r := recipe
 			r.Runner = v["runner"]
 			r.Group = v["group"]
 			var override *service.Recipe
-			if forceOverride || r.Runner != recipe.Runner || r.Group != recipe.Group {
+			if forceOverride || r.Runner != recipe.Runner || r.Runner == "pueue" && r.Group != recipe.Group {
+				if r.Runner != "pueue" {
+					r.Group = ""
+				}
 				override = &r
 			}
 			p, err := s.RunPlan(ctx, snap, j.ID, override)

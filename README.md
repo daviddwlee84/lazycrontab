@@ -52,14 +52,19 @@ The dashboard uses colored focus, selection and status indicators. Wide terminal
 
 Effective bindings drive both help and dispatch. Printable characters belong to the focused input, including `q`, `j` and `/`.
 
-Forms use Tab/Shift+Tab, arrows or clickable controls for choices, `Ctrl+P`/Browse for target paths and `Ctrl+O` for advanced settings. Enter on Schedule opens the shared cron editor; F1 opens contextual concepts and returns to the same draft. `Ctrl+S` prepares a review; **`y` or another Ctrl+S applies, Enter does not approve**. Esc returns to the draft or cancels a standalone confirmation. Results remain visible until acknowledged. Job/source forms and host selection stay inside the dashboard; external editors and native SSH temporarily take terminal ownership.
+Forms use ↓/Tab for the next field and ↑/Shift+Tab for the previous field, skipping unavailable fields. On choice fields, ←→ changes the value; j/k moves between fields and h/l or Space changes the choice. Letters remain text in text inputs. `Ctrl+P`/Browse selects target paths and `Ctrl+O` opens advanced settings. Enter on Schedule opens the shared cron editor; F1 opens contextual concepts and returns to the same draft. Nested pickers, cron editors and multiline editors retain their own arrow-key behavior. `Ctrl+S` prepares a review; **`y` or another Ctrl+S applies, Enter does not approve**. Esc returns to the draft or cancels a standalone confirmation. Results remain visible until acknowledged. Job/source forms and host selection stay inside the dashboard; external editors and native SSH temporarily take terminal ownership.
 
-Add/Edit job forms open in a centered popup with the dashboard still visible.
+Add/Edit job forms open in a popup with the dashboard still visible. Its top edge
+stays fixed, with room below for Advanced to expand. Changing runner or task type
+keeps the focused row in place. Command, existing script and managed content share
+one input position; inapplicable runtime/project/argument rows reserve blank space.
+Runner-related rows stay in place and show a muted reason when unavailable.
 Fields scroll with focus; schedule editing, path browsing, help and managed-script
 content stay in the same popup and return to the current draft. Advanced expands
-the popup to fit the available height and focuses the first newly revealed field.
-When space is limited, a visible field range and Tab/arrows/wheel hints show how
-to reach the remaining fields. Collapsing Advanced retains entered values.
+downward to fit the available height and focuses the first newly revealed field.
+When space is limited, a visible row range and Tab/arrows/wheel hints show how
+to reach the remaining fields. Collapsing Advanced or switching types retains
+entered values; only values applicable to the selected task are used in its plan.
 The popup owns input until you finish or cancel it. Standalone CLI wizards retain
 their full terminal layout.
 
@@ -238,7 +243,7 @@ running a job. Pueue owns the [task working directory and shell invocation](http
 
 Output preserves existing behavior by default. `--output PATH` appends stdout/stderr together; `--stderr PATH` separates stderr. Parent directories must exist. Pueue uses its own capture by default. Review shows the generated shell command and required cron percent escaping.
 
-For Pueue, the wizard hides empty output/error/log file fields and points to `pueue log` or lazypueue. Existing explicit paths remain visible and editable; switching runners never silently clears them. Explicit redirects apply to the queued task, so redirected output goes to those files instead of Pueue's capture. The task ID and errors from cron invoking `pueue add` remain separate from the task's output.
+For Pueue, empty output/error/log file fields stay in place but are disabled, with a note pointing to `pueue log` or lazypueue. Existing explicit paths remain editable; clearing a focused path leaves it editable until you move away. Switching runners never silently clears values. Explicit redirects apply to the queued task, so redirected output goes to those files instead of Pueue's capture. The task ID and errors from cron invoking `pueue add` remain separate from the task's output.
 
 Scripts use explicit paths, private editing copies, diffs, conflict checks, backups and permission-preserving replacement. Arbitrary command strings are not searched heuristically for a script filename.
 
@@ -353,6 +358,7 @@ python3 scripts/pty_smoke.py /tmp/lazycrontab-dev
 python3 scripts/pty_managed.py /tmp/lazycrontab-dev
 python3 scripts/pty_raw_source.py /tmp/lazycrontab-dev
 python3 scripts/pty_review.py /tmp/lazycrontab-dev
+python3 scripts/pty_stable_form.py /tmp/lazycrontab-dev
 python3 scripts/pty_completion.py /tmp/lazycrontab-dev  # requires zsh
 ```
 

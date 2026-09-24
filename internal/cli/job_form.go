@@ -191,6 +191,14 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 	for key, value := range values {
 		initialValues[key] = value
 	}
+	commandScript := r.Script
+	if r.ManagedScript != nil {
+		commandScript = ""
+	}
+	initialExecution := effectiveJobValues(initialValues, commandScript)
+	if explicitScript, ok := overrides["script"]; ok {
+		commandScript = explicitScript
+	}
 	if _, replace := overrides["command"]; replace {
 		values["preset"] = "command"
 		values["runtime"] = ""
@@ -205,13 +213,8 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 		values[k] = v
 	}
 	build := func(ctx context.Context, v map[string]string) (ui.Review, error) {
-		executionUnchanged := op == "edit"
-		for _, key := range []string{"command", "runner", "group", "directory", "output", "stderr", "script", "log", "preset", "runtime", "project", "args", "environment", "script_content"} {
-			if v[key] != initialValues[key] {
-				executionUnchanged = false
-				break
-			}
-		}
+		v = effectiveJobValues(v, commandScript)
+		executionUnchanged := op == "edit" && sameExecutionValues(v, initialExecution)
 		targetHost, targetSource := host, source
 		if op == "add" {
 			if v["host"] != "" {
@@ -310,10 +313,6 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 					return ui.Review{}, err
 				}
 			}
-		} else if preset == "command" && r.ManagedScript != nil && v["script"] == r.Script {
-			// Returning to a one-line command must not retain a hidden managed
-			// script association from the previous draft.
-			recipe.Script = ""
 		}
 		if preset != "command" {
 			args, err := splitArgs(v["args"])
@@ -445,13 +444,13 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 	fields = append(fields,
 		ui.Field{Key: "name", Label: "Name"},
 		ui.Field{Key: "preset", Label: "What to run", Options: jobPresets(), OptionLabels: presetLabels, Hint: "Shell command needs no file. Choose Managed shell script to write multiple lines without managing a path."},
-		ui.Field{Key: "command", Label: "Command to execute (e.g. echo \"hi\")", Hint: "A shell command runs directly; no script file is needed.", Show: func(v map[string]string) bool { return v["preset"] == "command" }},
-		ui.Field{Key: "script", Label: "Existing script file on selected host", Hint: "Enter a file path, e.g. ./job.sh. For echo \"hi\", choose Shell command.", Show: func(v map[string]string) bool { return showScript(v) && v["preset"] != "managed-shell" }, Pick: jobPathPicker(s, chosenHost, "script", false)},
-		ui.Field{Key: "script_content", Label: "Script content · Enter to edit", Kind: "multiline", Hint: "Write shell commands; lazycrontab saves a private version on the selected host only after Apply.", Show: func(v map[string]string) bool { return v["preset"] == "managed-shell" }},
-		ui.Field{Key: "runtime", Label: "Interpreter / uv executable (Browse to choose)", Show: func(v map[string]string) bool { return showScript(v) && v["preset"] != "executable" }, Pick: jobRuntimePicker(s, chosenHost)},
-		ui.Field{Key: "project", Label: "Python project (Browse to choose)", Show: func(v map[string]string) bool { return v["preset"] == "uv-project" }, Pick: jobProjectPicker(s, chosenHost)},
+		ui.Field{Key: "command", Slot: "payload", Label: "Command to execute (e.g. echo \"hi\")", Hint: "A shell command runs directly; no script file is needed.", Show: func(v map[string]string) bool { return v["preset"] == "command" }},
+		ui.Field{Key: "script", Slot: "payload", Label: "Existing script file on selected host", Hint: "Enter a file path, e.g. ./job.sh. For echo \"hi\", choose Shell command.", Show: func(v map[string]string) bool { return showScript(v) && v["preset"] != "managed-shell" }, Pick: jobPathPicker(s, chosenHost, "script", false)},
+		ui.Field{Key: "script_content", Slot: "payload", Label: "Script content · Enter to edit", Kind: "multiline", Hint: "Write shell commands; lazycrontab saves a private version on the selected host only after Apply.", Show: func(v map[string]string) bool { return v["preset"] == "managed-shell" }},
+		ui.Field{Key: "runtime", Reserve: true, Label: "Interpreter / uv executable (Browse to choose)", Show: func(v map[string]string) bool { return showScript(v) && v["preset"] != "executable" }, Pick: jobRuntimePicker(s, chosenHost)},
+		ui.Field{Key: "project", Reserve: true, Label: "Python project (Browse to choose)", Show: func(v map[string]string) bool { return v["preset"] == "uv-project" }, Pick: jobProjectPicker(s, chosenHost)},
 		ui.Field{Key: "directory", Label: "Working directory (script presets suggest a default)", Pick: jobPathPicker(s, chosenHost, "directory", true)},
-		ui.Field{Key: "args", Label: "Arguments (quotes group spaces; no expansion)", Show: showScript},
+		ui.Field{Key: "args", Reserve: true, Label: "Arguments (quotes group spaces; no expansion)", Show: showScript},
 		ui.Field{Key: "schedule", Label: "Schedule · Enter to open builder", Kind: "schedule"},
 		ui.Field{Key: "enabled", Label: "Enabled", Options: []string{"true", "false"}, Hint: "Choose false to save the job without scheduling it while you fix a runtime finding."},
 		ui.Field{Key: "remark", Label: "Remark / why"},
@@ -464,7 +463,7 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			field.Options = []string{"direct", "pueue"}
 		case "group":
 			field.Label = "Existing Pueue group"
-			field.Show = func(v map[string]string) bool { return v["runner"] == "pueue" }
+			field.DisabledWhen = pueueGroupDisabled
 			field.Hint = pueueOutputHint
 		case "environment":
 			field.Label = "Variables (literal NAME=value; quote spaces)"
@@ -479,11 +478,10 @@ func newJobFormSpec(ctx context.Context, s *service.Service, host, source, op, i
 			field.Pick = jobPathPicker(s, chosenHost, key, false)
 		}
 		if key == "output" || key == "stderr" || key == "log" {
-			// Keep explicit paths visible, including drafts switched from direct
-			// execution. Hiding a configured redirect would conceal its effect.
-			field.Show = func(v map[string]string) bool {
-				return v["runner"] != "pueue" || v[key] != ""
-			}
+			// Reserve every row; explicit paths remain editable because their
+			// redirects still apply when switching from direct execution.
+			field.DisabledWhen = pueuePathDisabled(key)
+			field.KeepEditingOnDisable = true
 		}
 		fields = append(fields, field)
 	}
@@ -562,6 +560,9 @@ func jobScriptUpdates(ctx context.Context, s *service.Service, host, source stri
 	if preset == "" || preset == "command" || strings.TrimSpace(v["script"]) == "" {
 		return nil
 	}
+	// Discovery follows the selected preset too: an inactive project/runtime
+	// draft must not produce an error hint while inspecting another task type.
+	v = effectiveJobValues(v, "")
 	updates := []ui.FieldUpdate{}
 	set := func(key, value, hint string) {
 		update := ui.FieldUpdate{Key: key, Hint: hint}

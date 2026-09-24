@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Unify form ↑↓ navigation, reserve stable conditional-field positions, and anchor job popups while switching task types or runners; retain inactive drafts without letting them affect execution plans.
+
 - Resize Advanced job popups and reveal newly expanded fields; remove Alt view-switching shortcuts and make mouse capture a config-only preference, enabled by default.
 
 - Show Add/Edit job drafts and their nested editors in dashboard popups.

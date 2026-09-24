@@ -17,14 +17,18 @@ import (
 var ErrCancelled = errors.New("cancelled")
 
 type Field struct {
-	Key, Label, Value string
-	Kind, Hint        string
-	Pick              func(context.Context, map[string]string) ([]PickOption, error)
-	Options           []string
-	OptionLabels      map[string]string
-	Advanced          bool
-	Unavailable       map[string]string
-	Show              func(map[string]string) bool
+	Key, Label, Value    string
+	Kind, Hint           string
+	Pick                 func(context.Context, map[string]string) ([]PickOption, error)
+	Options              []string
+	OptionLabels         map[string]string
+	Advanced             bool
+	Unavailable          map[string]string
+	Show                 func(map[string]string) bool
+	Slot                 string
+	Reserve              bool
+	DisabledWhen         func(map[string]string) string
+	KeepEditingOnDisable bool
 }
 type FieldUpdate struct {
 	Key         string
@@ -122,6 +126,9 @@ type Form struct {
 	popupHost                    bool
 	popupEditorHeight            int
 	visibleLayout                string
+	fieldTop                     int
+	keepEditingIndex             int
+	keepEditingReason            string
 	live                         string
 	liveGeneration               int
 	schedule                     *ScheduleEditor
@@ -163,6 +170,7 @@ func (f *Form) finish() tea.Cmd {
 		return nil
 	}
 	f.finished = true
+	f.clearEditLatch()
 	f.cancel()
 	if f.embedded {
 		result := WorkflowDoneMsg{Err: f.err, Message: f.message, Changed: f.result.Submitted || f.applyDispatched, Owner: f}
@@ -178,7 +186,7 @@ func (f *Form) Result() (FormResult, error) { return f.result, f.err }
 
 func NewForm(ctx context.Context, spec FormSpec) *Form {
 	child, cancel := context.WithCancel(ctx)
-	f := &Form{spec: spec, ctx: child, cancel: cancel, width: 80, height: 24, canvasWidth: 80, canvasHeight: 24, stage: "edit", dark: spec.Theme != "light"}
+	f := &Form{spec: spec, ctx: child, cancel: cancel, width: 80, height: 24, canvasWidth: 80, canvasHeight: 24, focus: -1, keepEditingIndex: -1, stage: "edit", dark: spec.Theme != "light"}
 	for _, field := range spec.Fields {
 		input := textinput.New()
 		if field.Kind == "multiline" {
@@ -195,10 +203,11 @@ func NewForm(ctx context.Context, spec FormSpec) *Form {
 		input.SetVirtualCursor(true)
 		f.inputs = append(f.inputs, input)
 	}
-	if len(f.inputs) > 0 {
-		f.inputs[0].Focus()
+	if list := f.focusable(); len(list) > 0 {
+		f.focus = list[0]
+		f.inputs[f.focus].Focus()
 	}
-	f.visibleLayout = fmt.Sprint(f.visible())
+	f.visibleLayout = f.rowSignature()
 	return f
 }
 func (f *Form) Init() tea.Cmd {
@@ -251,31 +260,45 @@ func (f *Form) Values() map[string]string {
 }
 func (f *Form) visible() []int {
 	out := []int{}
-	values := f.Values()
-	for i, v := range f.spec.Fields {
-		if (!v.Advanced || f.advanced) && (v.Show == nil || v.Show(values)) {
-			out = append(out, i)
+	for _, row := range f.renderRows() {
+		if row.field >= 0 {
+			out = append(out, row.field)
 		}
 	}
 	return out
 }
 func (f *Form) move(delta int) {
-	list := f.visible()
+	list := f.focusable()
 	if len(list) == 0 {
+		f.blurField()
 		return
 	}
-	pos := 0
+	pos := -1
 	for i, n := range list {
 		if n == f.focus {
 			pos = i
 		}
 	}
-	f.inputs[f.focus].Blur()
-	f.focus = list[(pos+delta+len(list))%len(list)]
-	f.inputs[f.focus].Focus()
+	if pos < 0 {
+		if delta < 0 {
+			f.focusField(list[len(list)-1])
+		} else {
+			f.focusField(list[0])
+		}
+		return
+	}
+	next := list[(pos+delta+len(list))%len(list)]
+	if next == f.focus && f.keepEditingIndex == f.focus {
+		f.clearEditLatch()
+		f.reflowDraft()
+		return
+	}
+	f.focusField(next)
 }
 func (f *Form) reviewCmd() tea.Cmd {
 	f.mousePress = ""
+	f.clearEditLatch()
+	f.reflowDraft()
 	f.err = nil
 	f.stage = "building"
 	values := f.Values()
@@ -321,18 +344,23 @@ func (f *Form) changed(key string) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 func (f *Form) focusField(index int) {
-	if index < 0 || index >= len(f.inputs) {
+	if !f.fieldFocusable(index) {
 		return
 	}
-	if len(f.inputs) > 0 {
+	if index == f.focus {
+		return
+	}
+	if f.focus >= 0 && f.focus < len(f.inputs) {
 		f.inputs[f.focus].Blur()
 	}
+	f.clearEditLatch()
 	f.focus = index
 	f.inputs[index].Focus()
 	f.mousePress = ""
+	f.ensureFieldViewport()
 }
 func (f *Form) chooseOption(delta int) tea.Cmd {
-	if len(f.inputs) == 0 {
+	if !f.fieldFocusable(f.focus) {
 		return nil
 	}
 	field := f.spec.Fields[f.focus]
@@ -355,6 +383,9 @@ func (f *Form) chooseOption(delta int) tea.Cmd {
 	return f.changed(field.Key)
 }
 func (f *Form) openSchedule() tea.Cmd {
+	if !f.fieldFocusable(f.focus) {
+		return nil
+	}
 	options := ScheduleEditorOptions{Timezone: "Local", Locale: "en", Mouse: f.spec.Mouse}
 	if f.spec.ScheduleContext != nil {
 		options = f.spec.ScheduleContext(f.Values())
@@ -371,6 +402,10 @@ func (f *Form) openSchedule() tea.Cmd {
 }
 func (f *Form) closeSchedule() tea.Cmd {
 	i := f.scheduleIndex
+	if !f.fieldFocusable(i) {
+		f.schedule = nil
+		return nil
+	}
 	f.inputs[i].SetValue(f.schedule.Expression())
 	f.schedule = nil
 	return f.changed(f.spec.Fields[i].Key)
@@ -451,6 +486,9 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					f.spec.Fields[i].Unavailable = u.Unavailable
 					if u.Value != nil && f.fieldValue(i) == f.loadValues[u.Key] {
+						if i == f.keepEditingIndex {
+							f.clearEditLatch()
+						}
 						f.setFieldValue(i, *u.Value)
 					}
 					f.spec.Fields[i].Hint = u.Hint
@@ -482,6 +520,10 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return f, f.updateMultiline(msg)
 	}
 	if f.schedule != nil {
+		if !f.fieldFocusable(f.scheduleIndex) {
+			f.schedule = nil
+			return f, nil
+		}
 		switch m := msg.(type) {
 		case ScheduleUseMsg:
 			return f, f.closeSchedule()
@@ -606,7 +648,7 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return f, f.startPicker()
 		case "f1":
 			topic := "paths-and-scripts"
-			if len(f.inputs) > 0 {
+			if f.focus >= 0 && f.focus < len(f.inputs) {
 				switch f.spec.Fields[f.focus].Key {
 				case "host", "source":
 					topic = "ssh"
@@ -624,10 +666,10 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			f.help.Update(tea.WindowSizeMsg{Width: f.width, Height: f.height})
 			return f, f.help.Init()
 		case "enter":
-			if len(f.inputs) > 0 && f.spec.Fields[f.focus].Kind == "multiline" {
+			if f.fieldFocusable(f.focus) && f.spec.Fields[f.focus].Kind == "multiline" {
 				return f, f.openMultiline()
 			}
-			if len(f.inputs) > 0 && f.spec.Fields[f.focus].Kind == "schedule" {
+			if f.fieldFocusable(f.focus) && f.spec.Fields[f.focus].Kind == "schedule" {
 				return f, f.openSchedule()
 			}
 			f.move(1)
@@ -638,35 +680,37 @@ func (f *Form) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "shift+tab":
 			f.move(-1)
 			return f, nil
+		case "up":
+			f.move(-1)
+			return f, nil
+		case "down":
+			f.move(1)
+			return f, nil
 		}
-		if len(f.inputs) > 0 && len(f.spec.Fields[f.focus].Options) == 0 {
-			if key == "up" || key == "down" {
-				delta := 1
-				if key == "up" {
-					delta = -1
-				}
-				f.move(delta)
-				return f, nil
-			}
-		}
-		if len(f.inputs) > 0 && len(f.spec.Fields[f.focus].Options) > 0 {
+		if f.fieldFocusable(f.focus) && len(f.spec.Fields[f.focus].Options) > 0 {
 			switch key {
-			case "left", "up", "h", "k":
+			case "left", "h":
 				return f, f.chooseOption(-1)
-			case "right", "down", "l", "j", "space":
+			case "right", "l", "space":
 				return f, f.chooseOption(1)
+			case "k":
+				f.move(-1)
+			case "j":
+				f.move(1)
 			}
 			return f, nil
 		}
-		if len(f.inputs) > 0 && (f.spec.Fields[f.focus].Kind == "schedule" || f.spec.Fields[f.focus].Kind == "multiline") {
+		if f.fieldFocusable(f.focus) && (f.spec.Fields[f.focus].Kind == "schedule" || f.spec.Fields[f.focus].Kind == "multiline") {
 			return f, nil
 		}
 	}
-	if f.stage == "edit" && len(f.inputs) > 0 {
+	if f.stage == "edit" && f.fieldFocusable(f.focus) {
 		before := f.inputs[f.focus].Value()
+		context := f.Values()
 		var cmd tea.Cmd
 		f.inputs[f.focus], cmd = f.inputs[f.focus].Update(msg)
 		if before != f.inputs[f.focus].Value() {
+			f.latchClearedInput(msg, before, context)
 			return f, tea.Batch(cmd, f.changed(f.spec.Fields[f.focus].Key))
 		}
 		return f, cmd
@@ -708,7 +752,7 @@ func (f *Form) activate(id string) tea.Cmd {
 		}
 		f.advanced = !f.advanced
 		if f.advanced {
-			for _, index := range f.visible() {
+			for _, index := range f.focusable() {
 				if f.spec.Fields[index].Advanced && !before[index] {
 					f.focusField(index)
 					break
@@ -721,6 +765,11 @@ func (f *Form) activate(id string) tea.Cmd {
 		return f.startPicker()
 	default:
 		var index int
+		if _, raw, ok := strings.Cut(id, ":"); ok {
+			if _, err := fmt.Sscanf(raw, "%d", &index); err != nil || !f.fieldFocusable(index) {
+				return nil
+			}
+		}
 		if strings.HasPrefix(id, "prev:") {
 			fmt.Sscanf(id, "prev:%d", &index)
 			f.focusField(index)
@@ -750,15 +799,12 @@ func (f *Form) activate(id string) tea.Cmd {
 	return nil
 }
 func (f *Form) fieldWindow() ([]int, int, int) {
-	list := f.visible()
-	rows := max(1, (f.height-10)/2)
-	pos := 0
-	for i, n := range list {
-		if n == f.focus {
-			pos = i
-		}
+	list := []int{}
+	for _, row := range f.renderRows() {
+		list = append(list, row.field)
 	}
-	start := max(0, pos-rows+1)
+	rows := max(1, (f.height-10)/2)
+	start := min(f.fieldTop, max(0, len(list)-rows))
 	return list, start, rows
 }
 func safe(s string) string {
@@ -809,6 +855,9 @@ func (f *Form) hits() []hitRegion {
 		list, start, rows := f.fieldWindow()
 		for n, i := range list[start:min(len(list), start+rows)] {
 			y := 2 + n*2
+			if i < 0 || !f.fieldFocusable(i) {
+				continue
+			}
 			field := f.spec.Fields[i]
 			if len(field.Options) > 0 {
 				hits = append(hits, hitRegion{fmt.Sprintf("prev:%d", i), rect{2, y + 1, 2, 1}}, hitRegion{fmt.Sprintf("next:%d", i), rect{5 + ansi.StringWidth(safe(field.displayValue(f.inputs[i].Value()))), y + 1, 1, 1}})
@@ -863,12 +912,25 @@ func (f *Form) View() tea.View {
 		return v
 	}
 	t := styles(f.dark)
-	lines := []string{t.Title.Render(clip(f.spec.Title, f.width)), t.Muted.Render(clip("Tab next  ·  Shift+Tab back  ·  Ctrl+P browse", f.width))}
+	lines := []string{t.Title.Render(clip(f.spec.Title, f.width)), t.Muted.Render(clip("↑↓ fields · ←→ choices · Tab next · Ctrl+P browse", f.width))}
 	switch f.stage {
 	case "edit":
 		list, start, rows := f.fieldWindow()
 		for _, i := range list[start:min(len(list), start+rows)] {
+			if i < 0 {
+				lines = append(lines, "", "")
+				continue
+			}
 			field := f.spec.Fields[i]
+			disabled := f.disabledReason(i, f.Values())
+			if disabled != "" {
+				value := safe(field.displayValue(f.fieldValue(i)))
+				if value != "" {
+					value += " · "
+				}
+				lines = append(lines, t.Muted.Render(clip("  "+safe(field.Label)+" · unavailable", f.width)), t.Muted.Render(clip("  "+value+safe(disabled), f.width)))
+				continue
+			}
 			prefix := "  "
 			label := safe(field.Label)
 			if i == f.focus {
@@ -898,7 +960,7 @@ func (f *Form) View() tea.View {
 			lines = append(lines, "  "+clip(value, max(1, f.width-3)))
 		}
 		hint := f.live
-		if len(f.inputs) > 0 && f.spec.Fields[f.focus].Hint != "" {
+		if f.focus >= 0 && f.focus < len(f.inputs) && f.spec.Fields[f.focus].Hint != "" {
 			hint = f.spec.Fields[f.focus].Hint
 		}
 		if hint != "" {

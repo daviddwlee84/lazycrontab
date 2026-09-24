@@ -202,6 +202,7 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             # to the still-intact Playground instead of a new child process.
             mark=session.mark();session.send("u")
             session.expect("add job",mark)
+            session.send(b"\t"*6)  # Scroll to Schedule past reserved script rows.
             session.expect("12 9 * * 1-5",mark)
             before=cron.read_text()
             mark=session.mark();session.send(b"\x1b")
@@ -223,7 +224,7 @@ printf '\\n# edited by PTY fixture\\n' >> "$last"
             session.expect("Concepts",mark)
             mark=session.mark();session.send(b"\x1b")
             session.expect("add job",mark)
-            session.expect("PTY backup",mark)
+            session.expect("fixture remark",mark)
             # Click Review, Back and Apply through shared semantic buttons.
             mark=session.mark();session.click(10,28)
             session.expect("proposed",mark)

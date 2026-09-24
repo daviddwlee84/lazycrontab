@@ -71,6 +71,9 @@ func (f *Form) setFieldValue(index int, value string) {
 	}
 }
 func (f *Form) openMultiline() tea.Cmd {
+	if !f.fieldFocusable(f.focus) {
+		return nil
+	}
 	area := textarea.New()
 	area.Prompt = ""
 	area.Placeholder = "echo \"hi\"\n# Add more shell commands here"
@@ -135,6 +138,10 @@ func (f *Form) multilineHits() []hitRegion {
 }
 func (f *Form) updateMultiline(msg tea.Msg) tea.Cmd {
 	m := f.multiline
+	if !f.fieldFocusable(m.index) {
+		f.multiline = nil
+		return nil
+	}
 	switch v := msg.(type) {
 	case multilinePaste:
 		if v.owner != f || v.draft != m {
@@ -259,7 +266,7 @@ func (f *Form) prepareTextEditor() tea.Cmd {
 	}
 }
 func (f *Form) launchTextEditor(msg textEditorReady) tea.Cmd {
-	if msg.owner != f || f.multiline == nil || msg.generation != f.multiline.editGeneration || f.finished {
+	if msg.owner != f || f.multiline == nil || msg.generation != f.multiline.editGeneration || f.finished || !f.fieldFocusable(f.multiline.index) {
 		if msg.cleanup != nil {
 			msg.cleanup()
 		}
@@ -293,7 +300,7 @@ func (f *Form) launchTextEditor(msg textEditorReady) tea.Cmd {
 	})
 }
 func (f *Form) receiveTextEditor(msg textEditorResult) tea.Cmd {
-	if msg.owner != f || f.multiline == nil || msg.generation != f.multiline.editGeneration {
+	if msg.owner != f || f.multiline == nil || msg.generation != f.multiline.editGeneration || !f.fieldFocusable(f.multiline.index) {
 		return nil
 	}
 	f.multiline.pending = false

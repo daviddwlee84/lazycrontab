@@ -67,7 +67,7 @@ func addExecution(root *cobra.Command, o *options) {
 		if cmd.Flags().Changed("group") {
 			recipe.Group = group
 		}
-		spec := runFormSpec(s, snap, j, recipe, cmd.Flags().Changed("runner") || cmd.Flags().Changed("group"))
+		spec := runFormSpec(s, snap, j, recipe, cmd.Flags().Changed("runner") || cmd.Flags().Changed("group") && recipe.Runner == "pueue")
 		build := spec.Build
 		values := map[string]string{"runner": recipe.Runner, "group": recipe.Group}
 		if o.interactive {

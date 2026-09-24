@@ -27,7 +27,7 @@ type formPickLoaded struct {
 }
 
 func (f *Form) startPicker() tea.Cmd {
-	if f.stage != "edit" || len(f.inputs) == 0 || f.spec.Fields[f.focus].Pick == nil {
+	if f.stage != "edit" || !f.fieldFocusable(f.focus) || f.spec.Fields[f.focus].Pick == nil {
 		return nil
 	}
 	q := textinput.New()
@@ -57,7 +57,7 @@ func (f *Form) fetchPick() tea.Cmd {
 	return func() tea.Msg { items, err := load(ctx, values); return formPickLoaded{f, g, items, err} }
 }
 func (f *Form) acceptPick(m formPickLoaded) tea.Cmd {
-	if m.owner != f || f.picker == nil || f.picker.generation != m.generation {
+	if m.owner != f || f.picker == nil || f.picker.generation != m.generation || !f.fieldFocusable(f.picker.index) {
 		return nil
 	}
 	f.picker.items = m.items
@@ -78,6 +78,10 @@ func (f *Form) pickerItems() []PickOption {
 }
 func (f *Form) pickCurrent() tea.Cmd {
 	p := f.picker
+	if !f.fieldFocusable(p.index) {
+		f.closePicker()
+		return nil
+	}
 	items := f.pickerItems()
 	if p.pending || len(items) == 0 {
 		return nil
@@ -117,6 +121,10 @@ func (f *Form) pickerHits() []hitRegion {
 }
 func (f *Form) updatePicker(msg tea.Msg) tea.Cmd {
 	p := f.picker
+	if !f.fieldFocusable(p.index) {
+		f.closePicker()
+		return nil
+	}
 	switch m := msg.(type) {
 	case tea.KeyPressMsg:
 		p.press = ""
