@@ -4,6 +4,19 @@ Understand and manage cron jobs from a Go CLI and terminal dashboard, locally or
 
 Linux and macOS are supported. Remote hosts use their existing `crontab` and POSIX tools; no remote lazycrontab agent is required. Supercronic files are explicit additional sources. System crontabs are read-only.
 
+## Install / 安裝
+
+```sh
+brew install daviddwlee84/tap/lazycrontab
+lazycrontab --version
+lazycrontab upgrade --check
+```
+
+**v0.1.2** adds macOS/Linux amd64/arm64 binary releases and the personal Homebrew
+formula. Go is optional for binary installs; runtime backends remain separate.
+See [installation, completion and owner-aware upgrades](docs/distribution.md).
+[MIT license](LICENSE).
+
 ## Install and run
 
 Requires Go **1.26.6+**. Source version **v0.1.1** uses versioned Go installation.

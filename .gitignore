@@ -75,3 +75,8 @@ go.work.sum
 /lazycrontab
 /bin/
 __pycache__/
+
+# Release artifacts
+/dist/
+/completions/
+__pycache__/

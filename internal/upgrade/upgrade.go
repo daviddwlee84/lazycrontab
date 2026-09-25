@@ -7,7 +7,10 @@ import (
 	"debug/buildinfo"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/daviddwlee84/lazycrontab/internal/brewupgrade"
+	"github.com/daviddwlee84/lazycrontab/internal/managedupgrade"
 	"io"
 	"net/http"
 	"os"
@@ -21,6 +24,7 @@ import (
 const Module = "github.com/daviddwlee84/lazycrontab"
 
 type Plan struct {
+	brewPlan   *brewupgrade.Plan
 	Current    string `json:"current"`
 	Candidate  string `json:"candidate,omitempty"`
 	Executable string `json:"executable"`
@@ -62,38 +66,20 @@ func CheckPath(ctx context.Context, current, exe, endpoint string) (Plan, error)
 	if e != nil {
 		return p, e
 	}
-	if i := strings.Index(resolved, string(filepath.Separator)+"Cellar"+string(filepath.Separator)); i >= 0 {
-		prefix := resolved[:i]
-		rest := strings.Split(resolved[i+8:], string(filepath.Separator))
-		if len(rest) < 3 {
-			return p, nil
-		}
-		formula := rest[0]
-		receipt := filepath.Join(prefix, "Cellar", rest[0], rest[1], "INSTALL_RECEIPT.json")
-		var data map[string]any
-		b, e := os.ReadFile(receipt)
-		if e != nil {
-			return p, fmt.Errorf("cannot verify Homebrew receipt: %w", e)
-		}
-		if e = json.Unmarshal(b, &data); e != nil {
-			return p, e
-		}
-		brew := filepath.Join(prefix, "bin", "brew")
-		if _, e = os.Stat(brew); e != nil {
-			return p, e
-		}
-		out, e := exec.CommandContext(ctx, brew, "--cellar").Output()
-		cellar, resolveErr := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
-		if e != nil || resolveErr != nil || cellar != filepath.Join(prefix, "Cellar") {
-			return p, fmt.Errorf("Homebrew Cellar does not match executable owner")
-		}
+	managed, managedErr := brewupgrade.Prepare(ctx, exe, "lazycrontab", brewupgrade.Options{Inspect: managedupgrade.Inspect(managedupgrade.Product{Binary: "lazycrontab", Module: Module, Main: Module})})
+	if managedErr == nil {
 		p.Owner = "homebrew"
 		p.Strategy = "homebrew"
 		p.Supported = true
-		p.Brew = brew
-		p.Formula = formula
-		p.Reason = "The owning Homebrew chooses its available version."
+		p.Brew = managed.BrewPath
+		p.Formula = managed.Formula
+		p.Current = managed.CurrentVersion
+		p.Reason = "The verified owning Homebrew chooses its available version."
+		p.brewPlan = &managed
 		return p, nil
+	}
+	if !errors.Is(managedErr, brewupgrade.ErrNotManaged) {
+		return p, managedErr
 	}
 	if strings.Contains(resolved, "/nix/store/") || strings.Contains(resolved, "/mise/") {
 		p.Owner = "package-manager"
@@ -112,7 +98,7 @@ func CheckPath(ctx context.Context, current, exe, endpoint string) (Plan, error)
 	}
 	if dev {
 		p.Owner = "development"
-		p.Reason = "Development, modified or unrecognized build is preserved. Install a published source tag to enable source upgrades."
+		p.Reason = "Development, modified or unrecognized build is preserved. For a chezmoi-managed release use just upgrade-personal; otherwise use the original installer or rebuild the checkout."
 		return p, nil
 	}
 	p.Owner = "source"
@@ -159,19 +145,14 @@ func Apply(ctx context.Context, p Plan, progress io.Writer) (string, error) {
 		return "", fmt.Errorf("installed executable changed after review")
 	}
 	if p.Strategy == "homebrew" {
-		cmd := exec.CommandContext(ctx, p.Brew, "upgrade", p.Formula)
-		cmd.Stdout = progress
-		cmd.Stderr = progress
-		if e = cmd.Run(); e != nil {
-			return "", e
+		if p.brewPlan == nil || p.Brew != p.brewPlan.BrewPath || p.Formula != p.brewPlan.Formula || p.Executable != p.brewPlan.CurrentPath {
+			return "", fmt.Errorf("Homebrew plan changed or was not verified")
 		}
-		prefix, e := exec.CommandContext(ctx, p.Brew, "--prefix", p.Formula).Output()
-		if e != nil {
-			return "", e
+		result, err := p.brewPlan.Apply(ctx, progress)
+		if err != nil {
+			return "", err
 		}
-		path := filepath.Join(strings.TrimSpace(string(prefix)), "bin", "lazycrontab")
-		out, e := exec.CommandContext(ctx, path, "--version").Output()
-		return path + "\n" + strings.TrimSpace(string(out)), e
+		return result.Path + "\n" + result.Version, nil
 	}
 	if p.Strategy != "source" {
 		return "", fmt.Errorf("unsupported upgrade strategy")

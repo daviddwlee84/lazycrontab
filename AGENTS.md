@@ -103,3 +103,9 @@ Cache keys include config and target identity, and omit command/script/env conte
 
 Maintain only verified project information here. See docs/architecture.md and
 docs/verification.md for boundaries and validation evidence.
+
+## Binary distribution
+
+See `docs/distribution.md`. Run GoReleaser config/snapshot checks and
+`scripts/check-distribution.py` before tagging. Preserve immutable releases and
+source/module exclusions. Backend setup is separate from installing this CLI.

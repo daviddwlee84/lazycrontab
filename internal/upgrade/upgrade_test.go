@@ -40,14 +40,23 @@ func TestHomebrewOwnerAndNoopVersion(t *testing.T) {
 	keg := filepath.Join(root, "Cellar", "lazycrontab", "1.0.0")
 	os.MkdirAll(filepath.Join(keg, "bin"), 0700)
 	binary := filepath.Join(keg, "bin", "lazycrontab")
-	os.WriteFile(binary, []byte("#!/bin/sh\necho 'lazycrontab version v1.0.0'\n"), 0700)
-	os.WriteFile(filepath.Join(keg, "INSTALL_RECEIPT.json"), []byte("{}"), 0600)
+	source := filepath.Join(root, "source")
+	os.MkdirAll(source, 0700)
+	os.WriteFile(filepath.Join(source, "go.mod"), []byte("module "+Module+"\n\ngo 1.26.6\n"), 0600)
+	os.WriteFile(filepath.Join(source, "main.go"), []byte("package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"lazycrontab version v1.0.0\")}\n"), 0600)
+	build := exec.Command("go", "build", "-o", binary, ".")
+	build.Dir = source
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("%s: %v", output, err)
+	}
+	os.WriteFile(filepath.Join(keg, "INSTALL_RECEIPT.json"), []byte(`{"source":{"tap":"daviddwlee84/tap","path":"Formula/lazycrontab.rb"}}`), 0600)
 	os.MkdirAll(filepath.Join(root, "bin"), 0700)
 	os.MkdirAll(filepath.Join(root, "opt"), 0700)
 	os.Symlink(keg, filepath.Join(root, "opt", "lazycrontab"))
+	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 	os.WriteFile(filepath.Join(root, "bin", "brew"), []byte(`#!/bin/sh
 case "$1" in
- --cellar) echo "$FIXTURE_BREW/Cellar";;
+ --cellar) echo "$FIXTURE_BREW/Cellar/lazycrontab";;
  --prefix) echo "$FIXTURE_BREW/opt/lazycrontab";;
  upgrade) printf '%s\n' "$@" > "$FIXTURE_BREW/invoked";;
  *) exit 2;;
@@ -65,7 +74,7 @@ esac
 		t.Fatal(message, e)
 	}
 	b, _ := os.ReadFile(filepath.Join(root, "invoked"))
-	if string(b) != "upgrade\nlazycrontab\n" {
+	if string(b) != "upgrade\ndaviddwlee84/tap/lazycrontab\n" {
 		t.Fatal(string(b))
 	}
 	os.WriteFile(binary, []byte("changed"), 0700)
