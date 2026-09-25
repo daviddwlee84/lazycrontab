@@ -19,18 +19,18 @@ See [installation, completion and owner-aware upgrades](docs/distribution.md).
 
 ## Install and run
 
-Requires Go **1.26.6+**. Source version **v0.1.1** uses versioned Go installation.
+Requires Go **1.26.6+**. Source version **v0.1.2** uses versioned Go installation.
 The matching tag must be published on GitHub before installing it:
 
 ```sh
-go install github.com/daviddwlee84/lazycrontab@v0.1.1
+go install github.com/daviddwlee84/lazycrontab@v0.1.2
 lazycrontab --version
 ```
 
 For subsequent source releases, `go install github.com/daviddwlee84/lazycrontab@latest`
 selects the latest published release tag, not necessarily the latest main-branch
 commit. Install locations follow `GOBIN`, or `GOPATH/bin`; ensure that directory
-is on PATH (`go env GOBIN GOPATH`). Releases currently use Go source installation.
+is on PATH (`go env GOBIN GOPATH`). Source installation remains optional alongside binary releases.
 
 To build a local checkout instead:
 
