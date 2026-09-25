@@ -12,18 +12,18 @@ lazycrontab --version
 lazycrontab upgrade --check
 ```
 
-**v0.1.2** adds macOS/Linux amd64/arm64 binary releases and the personal Homebrew
+**v0.1.3** adds macOS/Linux amd64/arm64 binary releases and the personal Homebrew
 formula. Go is optional for binary installs; runtime backends remain separate.
 See [installation, completion and owner-aware upgrades](docs/distribution.md).
 [MIT license](LICENSE).
 
 ## Install and run
 
-Requires Go **1.26.6+**. Source version **v0.1.2** uses versioned Go installation.
+Requires Go **1.26.6+**. Source version **v0.1.3** uses versioned Go installation.
 The matching tag must be published on GitHub before installing it:
 
 ```sh
-go install github.com/daviddwlee84/lazycrontab@v0.1.2
+go install github.com/daviddwlee84/lazycrontab@v0.1.3
 lazycrontab --version
 ```
 
